@@ -44,6 +44,17 @@
       <description>Gives the screen the contrast of print: blacks lift like ink on paper, whites get dimmer and slightly warmer, mid grey stays. The maximum matches uncoated paper.</description>
     </key>
 
+    <key name="brightness-enabled" type="b">
+      <default>false</default>
+      <summary>Dim the screen</summary>
+    </key>
+    <key name="brightness" type="d">
+      <range min="0.5" max="1.0"/>
+      <default>0.9</default>
+      <summary>Screen brightness</summary>
+      <description>Dims the whole screen while the extension runs.</description>
+    </key>
+
     <key name="print-colors-enabled" type="b">
       <default>false</default>
       <summary>Use print-like colours</summary>

@@ -119,7 +119,8 @@ def print_colours(b, gamut, strength):
     return np.clip(oklab_to_srgb(lab), 0, 1)
 
 
-def composite(base, texdir, intensity, balance=0.4, matte=0.0, print_colors=0.0):
+def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
+              print_colors=0.0):
     b = np.asarray(base.convert("RGB"), np.float32) / 255
     h, w = b.shape[:2]
 
@@ -131,7 +132,7 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, print_colors=0.0)
     light = 1 - (1 - dl) * (1 - tl)
 
     flare = matte_lift(matte)
-    brightness = matte_level(flare)
+    brightness = brightness * matte_level(flare)
 
     # Multiply pass: paper light and shadows.
     paper = brightness * np.array([1, 1 - 0.04 * matte, 1 - 0.12 * matte])
@@ -154,6 +155,7 @@ def main():
     ap.add_argument("-i", "--intensity", type=float, default=0.25)
     ap.add_argument("-d", "--dark-balance", type=float, default=0.4)
     ap.add_argument("-m", "--matte", type=float, default=0.0)
+    ap.add_argument("--brightness", type=float, default=1.0)
     ap.add_argument("-p", "--print-colors", type=float, default=0.0)
     ap.add_argument("--size", default="1600x1000")
     args = ap.parse_args()
@@ -163,7 +165,7 @@ def main():
     else:
         base = test_card(*map(int, args.size.split("x")))
     composite(base, args.texture, args.intensity, args.dark_balance,
-              args.matte, args.print_colors).save(args.output)
+              args.matte, args.brightness, args.print_colors).save(args.output)
 
 
 if __name__ == "__main__":

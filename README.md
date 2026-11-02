@@ -22,6 +22,7 @@ the settings schema and are shown in the preferences.
   ink reflects some light, so blacks lift and turn to charcoal at the
   maximum, as on uncoated paper. Whites drop and get a touch warmer, so
   mid grey and the overall brightness stay the same.
+- **Brightness**: dims the whole screen.
 - **Print colours** (experimental): limits colours to what offset print on
   uncoated paper can reach. Blues, violets and bright greens get much
   calmer, reds and yellows stay strong, greys don't change.
@@ -78,9 +79,9 @@ Each texture is two seamless tiles, uploaded once and tiled by the GPU
   only every 4096 px. Large features in the detail tile would make the
   1024 px grid obvious on big screens.
 
-Texture and matte are two full-screen passes per monitor (multiply, then
-OVER), each a single quad with a small shader. All settings are uniforms,
-so changing them never rebuilds anything.
+Texture, matte and brightness are two full-screen passes per monitor
+(multiply, then OVER), each a single quad with a small shader. All settings
+are uniforms, so changing them never rebuilds anything.
 
 Print colours need the finished pixels, so the UI is rendered offscreen
 and one shader does print colours and the paper in a single pass instead

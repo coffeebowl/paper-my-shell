@@ -50,6 +50,7 @@ const NO_CLIPPED_REDRAWS = Clutter.DrawDebugFlag.DISABLE_CLIPPED_REDRAWS;
 const SYNC_KEYS = [
     'texture-enabled', 'intensity', 'dark-balance',
     'matte-enabled', 'matte',
+    'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
     'hide-in-fullscreen',
 ];
@@ -86,8 +87,8 @@ float light = 1.0 - (1.0 - detail.r) * (1.0 - tone.r);
 }
 
 // Multiplied with the screen: shadows of the relief and the slightly warmer
-// white of paper under room light, at the overall brightness of the matte
-// look.
+// white of paper under room light. Brightness is a plain dimming factor on
+// top.
 const PAPER_MULTIPLY = `
 vec3 multiply = u_brightness *
     vec3(1.0, 1.0 - 0.04 * u_matte, 1.0 - 0.12 * u_matte) *
@@ -668,12 +669,13 @@ class PaperOverlay {
         const s = this._settings;
         const matte = s.get_boolean('matte-enabled') ? this._double('matte') : 0;
         const lift = matteLift(matte);
+        const brightness = s.get_boolean('brightness-enabled') ? this._double('brightness') : 1;
         const values = {
             intensity: s.get_boolean('texture-enabled') ? this._double('intensity') : 0,
             balance: this._double('dark-balance'),
             matte,
             lift,
-            brightness: matteLevel(lift),
+            brightness: brightness * matteLevel(lift),
         };
         const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;
 

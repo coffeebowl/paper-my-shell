@@ -157,6 +157,11 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
             _('The contrast of print instead of a screen: blacks lift like ink on paper, whites get dimmer and slightly warmer. Overall brightness stays the same.'), [
                 percentRow(settings, 'matte', 50, _('Amount'), ''),
             ]));
+
+        page.add(featureGroup(settings, 'brightness-enabled', _('Brightness'),
+            _('Dims the whole screen while the extension runs.'), [
+                percentRow(settings, 'brightness', 100, _('Brightness'), '', 50),
+            ]));
         window.add(page);
 
         const print = new Adw.PreferencesPage({

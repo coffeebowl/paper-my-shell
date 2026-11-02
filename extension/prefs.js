@@ -108,11 +108,11 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const settings = this.getSettings();
         window._settings = settings;
 
-        // The page says what the paper costs.
+        // The effects share their GPU cost, so the page says what that costs.
         const page = new Adw.PreferencesPage({
             title: _('Paper'),
             icon_name: 'x-office-document-symbolic',
-            description: _('The paper is two light passes over each monitor, drawn only on frames that change anyway. A still screen costs nothing.'),
+            description: _('These effects share two light passes over each monitor, drawn only on frames that change anyway. The first one you turn on costs a little, the others then add nothing measurable. A still screen costs nothing.'),
         });
 
         const general = new Adw.PreferencesGroup();
@@ -150,6 +150,11 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
                     _('Low values look most natural.')),
                 percentRow(settings, 'dark-balance', 100, _('Dark surfaces'),
                     _('Strength on dark areas, relative to light ones.')),
+            ]));
+
+        page.add(featureGroup(settings, 'matte-enabled', _('Matte'),
+            _('The contrast of print instead of a screen: blacks lift like ink on paper, whites get dimmer and slightly warmer. Overall brightness stays the same.'), [
+                percentRow(settings, 'matte', 50, _('Amount'), ''),
             ]));
         window.add(page);
     }

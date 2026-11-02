@@ -27,15 +27,32 @@ Gio._promisify(GdkPixbuf.Pixbuf, 'new_from_stream_async');
 
 const TILES = ['detail', 'tone'];
 
+// Schema maximum of the matte key.
+const MATTE_MAX = 0.5;
+
+// The darkest ink on uncoated paper still reflects about 5 % of the light.
+// The maximum matte reaches that.
+const PAPER_BLACK = 0.05 / MATTE_MAX;
+
+// Screen value of 18 % grey (L* 50), which keeps its brightness under the
+// matte look.
+const MID_GREY = 0.46;
+
+const FIT_SAMPLES = Array.from({length: 65}, (_, i) => i / 64);
+
 // Settings that only change values or visibility, not the textures.
 const SYNC_KEYS = [
     'texture-enabled', 'intensity', 'dark-balance',
+    'matte-enabled', 'matte',
     'hide-in-fullscreen',
 ];
 
 const UNIFORMS = `
 uniform float u_intensity;
 uniform float u_balance;
+uniform float u_matte;
+uniform float u_lift;
+uniform float u_brightness;
 uniform float u_tone_ratio;
 `;
 
@@ -61,15 +78,23 @@ float light = 1.0 - (1.0 - detail.r) * (1.0 - tone.r);
 `;
 }
 
-// Multiplied with the screen: shadows of the relief.
+// Multiplied with the screen: shadows of the relief and the slightly warmer
+// white of paper under room light, at the overall brightness of the matte
+// look.
 const PAPER_MULTIPLY = `
-vec3 multiply = vec3(1.0 - u_intensity * shadow);
+vec3 multiply = u_brightness *
+    vec3(1.0, 1.0 - 0.04 * u_matte, 1.0 - 0.12 * u_matte) *
+    (1.0 - u_intensity * shadow);
 `;
 
-// Composited OVER the screen: relief highlights.
+// Composited OVER the screen: relief highlights, over the light paper
+// reflects even from its darkest ink, which lifts blacks. Dimmed along with
+// the rest so nothing gets brighter than the dimmed white.
 const PAPER_OVER = `
 float highlight = u_intensity * u_balance * light;
-vec4 over = vec4(vec3(highlight), highlight);
+vec4 over = vec4(vec3(highlight), highlight) +
+    vec4(vec3(1.0, 0.97, 0.92) * u_lift, u_lift) * (1.0 - highlight);
+over.rgb *= u_brightness;
 `;
 
 const OVERLAY_RELIEF = reliefGlsl('cogl_tex_coord0_in.st', 'cogl_sampler0', 'cogl_sampler1');
@@ -79,6 +104,45 @@ cogl_color_out = vec4(multiply, 1.0);
 const OVER_SHADER = `${OVERLAY_RELIEF}${PAPER_OVER}
 cogl_color_out = over;
 `;
+
+/**
+ * How far the matte look lifts black, in screen values. Paper adds the
+ * light it reflects from its darkest ink in linear light, which lifts
+ * shadows a lot and midtones little. Blending can only map the screen
+ * along a straight line, so this is the lift of the line closest to that.
+ *
+ * @param {number} matte
+ * @returns {number}
+ */
+function matteLift(matte) {
+    const black = PAPER_BLACK * matte;
+    const paper = d => (black + (1 - black) * d ** 2.2) ** (1 / 2.2);
+    const error = lift => Math.max(...FIT_SAMPLES.map(d =>
+        Math.abs(lift + (1 - lift) * d - paper(d))));
+    // The error is convex in the lift, so narrow it down by thirds.
+    let [lo, hi] = [0, paper(0)];
+    for (let i = 0; i < 40; i++) {
+        const a = lo + (hi - lo) / 3;
+        const b = hi - (hi - lo) / 3;
+        if (error(a) < error(b))
+            hi = b;
+        else
+            lo = a;
+    }
+    return (lo + hi) / 2;
+}
+
+/**
+ * Overall level of the matte look. Paper only reflects light, so its white
+ * is dimmer than a screen's. Scaled so mid grey stays as it is: blacks
+ * lift, whites drop, and the screen as a whole doesn't get lighter.
+ *
+ * @param {number} lift - from matteLift()
+ * @returns {number}
+ */
+function matteLevel(lift) {
+    return MID_GREY / (lift + (1 - lift) * MID_GREY);
+}
 
 /**
  * @param {Cogl.Pipeline} pipeline
@@ -210,9 +274,9 @@ async function pruneCache(dir) {
 
 /**
  * Paints the paper over one monitor in two full-screen passes: a multiply
- * for shadows and an OVER for highlights. All settings are shader uniforms,
- * so changing them never rebuilds anything, and nothing animates, so the
- * surface never causes a redraw by itself.
+ * for shadows and paper light, and an OVER for highlights and flare. All
+ * settings are shader uniforms, so changing them never rebuilds anything,
+ * and nothing animates, so the surface never causes a redraw by itself.
  */
 const PaperSurface = GObject.registerClass(
 class PaperSurface extends Clutter.Actor {
@@ -224,7 +288,7 @@ class PaperSurface extends Clutter.Actor {
         this._over = this._createPipeline(ctx, textures, OVER_SHADER,
             'RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))');
         this._tileSize = textures.detailSize;
-        this._values = {intensity: 0, balance: 0};
+        this._values = {intensity: 0, balance: 0, lift: 0, brightness: 1};
     }
 
     _createPipeline(ctx, textures, shader, blend) {
@@ -254,15 +318,15 @@ class PaperSurface extends Clutter.Actor {
     }
 
     vfunc_paint_node(root, _paintContext) {
-        const {intensity, balance} = this._values;
+        const {intensity, balance, lift, brightness} = this._values;
         const [width, height] = this.get_size();
         const tiles = [width / this._tileSize, height / this._tileSize];
         const box = new Clutter.ActorBox({x1: 0, y1: 0, x2: width, y2: height});
 
         const passes = [];
-        if (intensity > 0)
+        if (intensity > 0 || brightness < 1)
             passes.push(this._multiply);
-        if (intensity * balance > 0)
+        if (intensity * balance > 0 || lift > 0)
             passes.push(this._over);
 
         for (const pipeline of passes) {
@@ -419,9 +483,14 @@ class PaperOverlay {
             return;
 
         const s = this._settings;
+        const matte = s.get_boolean('matte-enabled') ? this._double('matte') : 0;
+        const lift = matteLift(matte);
         const values = {
             intensity: s.get_boolean('texture-enabled') ? this._double('intensity') : 0,
             balance: this._double('dark-balance'),
+            matte,
+            lift,
+            brightness: matteLevel(lift),
         };
 
         // A covered fullscreen window can't be scanned out directly.
@@ -471,6 +540,8 @@ class PaperToggle extends QuickMenuToggle {
         // Useful intensities are small, a quadratic curve gives them room.
         this._addSlider('intensity', 'texture-enabled', {gicon}, _('Texture intensity'),
             v => v * v, value => Math.sqrt(value));
+        this._addSlider('matte', 'matte-enabled', {icon_name: 'display-brightness-symbolic'},
+            _('Matte'), v => v * MATTE_MAX, value => value / MATTE_MAX);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 

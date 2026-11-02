@@ -9,8 +9,8 @@ nothing.
 
 ## Features
 
-The defaults come from the settings schema and are shown in the
-preferences.
+Each effect can be switched on and off on its own. The defaults come from
+the settings schema and are shown in the preferences.
 
 - **Paper texture**: a shaded relief of tooth, fibres and pulp formation,
   lit from the upper left. Shadows multiply the content and highlights
@@ -18,6 +18,10 @@ preferences.
   contrast. Shadows show on light surfaces, highlights on dark ones; how
   strong it is on dark surfaces is adjustable.
 - **Three papers**: recycled, drawing and watercolor.
+- **Matte**: the contrast of print instead of a screen. Even the darkest
+  ink reflects some light, so blacks lift and turn to charcoal at the
+  maximum, as on uncoated paper. Whites drop and get a touch warmer, so
+  mid grey and the overall brightness stay the same.
 - **Stays out of the way**: monitors showing a fullscreen window hide the
   overlay, so games and videos keep direct scanout (can be turned off).
 
@@ -52,8 +56,8 @@ rm -r ~/.cache/paper-my-shell@coffeebowl
 ## Usage
 
 The **Paper** toggle in Quick Settings turns everything on and off. Its
-menu has the texture and its intensity. Everything else is in the
-preferences (Extensions app, or **Settings** in that menu).
+menu has the texture, its intensity and the matte amount. Everything else
+is in the preferences (Extensions app, or **Settings** in that menu).
 
 ## How it works
 
@@ -71,9 +75,9 @@ Each texture is two seamless tiles, uploaded once and tiled by the GPU
   only every 4096 px. Large features in the detail tile would make the
   1024 px grid obvious on big screens.
 
-The paper is two full-screen passes per monitor (multiply, then OVER),
-each a single quad with a small shader. All settings are uniforms, so
-changing them never rebuilds anything.
+Texture and matte are two full-screen passes per monitor (multiply, then
+OVER), each a single quad with a small shader. All settings are uniforms,
+so changing them never rebuilds anything.
 
 ## Development
 

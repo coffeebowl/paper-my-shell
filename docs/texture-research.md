@@ -36,6 +36,39 @@ stronger than highlights, so highlights are stored boosted to the same
 spread; the dark-balance setting scales them down at runtime. On dark
 surfaces paper structure is harder to see, around 0.4 looks natural.
 
+## Reflective look
+
+What makes a screen read as emissive rather than reflective:
+
+- whites brighter than anything else in the room,
+- deep blacks (paper always scatters some light back),
+- cool, neutral white (paper and room light are warmer).
+
+The matte setting handles all three. Paper's darkest ink still reflects a
+few percent of the light (about 5 % on uncoated paper). That light adds up
+in linear light, so in screen values `(b + (1 − b) · d^2.2)^(1/2.2)`:
+shadows lift a lot, midtones little. Only dimming and warming the white
+with a tiny flare reads as a colour filter, not as paper.
+
+Blending can't apply that curve. Each pass maps `dst` along a straight
+line (`src · dst` or `src + dst · (1 − a)`), and the only curved factor,
+`DST_COLOR` on both sides, gives `dst²` at a fixed weight that is far too
+strong. Correcting it needs extra passes that band in 8 bits. So the OVER
+pass lifts black along the straight line closest to the paper curve
+(least maximum error). Midtones come out up to 16 levels too light at the
+maximum, about 6 at the default. The exact curve would need the finished
+pixels, which costs a full repaint on every change.
+
+Lifting black alone made the whole screen lighter. So the curve is scaled
+until 18 % grey (L* 50) keeps its value: at the maximum black goes to 40,
+white down to 208, mid grey stays at 117. That also covers the first
+point, paper white doesn't glow. The scale is applied as an overall
+brightness factor on both passes.
+
+The multiply also warms the white a little. There is no light falloff
+across the screen: it is still a monitor, and the illusion shouldn't fight
+that.
+
 ## More materials
 
 ### From scans (most believable, least work)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Mirrors the shaders in extension.js: a multiply for shadows, then an OVER
-for highlights.
+Mirrors the shaders in extension.js: a multiply for shadows and paper
+light, then an OVER for highlights and flare.
 """
 
 import argparse
@@ -11,8 +11,10 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-# As in papergen.js.
+# As in papergen.js and extension.js.
 TONE_SCALE = 8
+PAPER_BLACK = 0.1
+MID_GREY = 0.46
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
          "processing cellulose fibres derived from wood, rags, grasses or other "
@@ -64,7 +66,22 @@ def relief(path, w, h, scale=1):
     return maps
 
 
-def composite(base, texdir, intensity, balance=0.4):
+def matte_lift(matte):
+    """Black lift of the straight line closest to paper, as matteLift()."""
+    black = PAPER_BLACK * matte
+    d = np.linspace(0, 1, 65)
+    paper = (black + (1 - black) * d ** 2.2) ** (1 / 2.2)
+    lifts = np.linspace(0, paper[0], 1001)[:, None]
+    error = np.abs(lifts + (1 - lifts) * d - paper).max(axis=1)
+    return lifts[error.argmin(), 0]
+
+
+def matte_level(lift):
+    """Overall level that keeps mid grey, as matteLevel()."""
+    return MID_GREY / (lift + (1 - lift) * MID_GREY)
+
+
+def composite(base, texdir, intensity, balance=0.4, matte=0.0):
     b = np.asarray(base.convert("RGB"), np.float32) / 255
     h, w = b.shape[:2]
     ds, dl = relief(texdir / "detail.png", w, h)
@@ -72,12 +89,19 @@ def composite(base, texdir, intensity, balance=0.4):
     shadow = 1 - (1 - ds) * (1 - ts)
     light = 1 - (1 - dl) * (1 - tl)
 
-    # Multiply pass: shadows.
-    b = b * (1 - intensity * shadow)[..., None]
+    flare = matte_lift(matte)
+    brightness = matte_level(flare)
 
-    # OVER pass: highlights.
+    # Multiply pass: paper light and shadows.
+    paper = brightness * np.array([1, 1 - 0.04 * matte, 1 - 0.12 * matte])
+    b = b * paper * (1 - intensity * shadow)[..., None]
+
+    # OVER pass: highlights over the light paper reflects from black.
     hl = (intensity * balance * light)[..., None]
-    b = b * (1 - hl) + hl
+    color = np.array([1, 0.97, 0.92]) * flare
+    c = hl + color * (1 - hl)
+    a = hl + flare * (1 - hl)
+    b = b * (1 - a) + c * brightness
     return Image.fromarray((np.clip(b, 0, 1) * 255 + 0.5).astype(np.uint8))
 
 
@@ -88,6 +112,7 @@ def main():
     ap.add_argument("-b", "--base", type=Path, help="screenshot, default: test card")
     ap.add_argument("-i", "--intensity", type=float, default=0.25)
     ap.add_argument("-d", "--dark-balance", type=float, default=0.4)
+    ap.add_argument("-m", "--matte", type=float, default=0.0)
     ap.add_argument("--size", default="1600x1000")
     args = ap.parse_args()
 
@@ -95,7 +120,8 @@ def main():
         base = Image.open(args.base)
     else:
         base = test_card(*map(int, args.size.split("x")))
-    composite(base, args.texture, args.intensity, args.dark_balance).save(args.output)
+    composite(base, args.texture, args.intensity, args.dark_balance,
+              args.matte).save(args.output)
 
 
 if __name__ == "__main__":

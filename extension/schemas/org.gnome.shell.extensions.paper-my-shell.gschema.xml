@@ -83,6 +83,17 @@
       <description>Limits colours to what offset print on uncoated paper can reach. 1 is the full print gamut. Renders the whole screen offscreen first, so it costs GPU time.</description>
     </key>
 
+    <key name="ink-spread-enabled" type="b">
+      <default>false</default>
+      <summary>Let ink spread into the paper</summary>
+    </key>
+    <key name="ink-spread" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.4</default>
+      <summary>Ink spread</summary>
+      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Shares the offscreen rendering with print colours.</description>
+    </key>
+
     <key name="hide-in-fullscreen" type="b">
       <default>true</default>
       <summary>Hide the overlay on monitors showing a fullscreen window</summary>

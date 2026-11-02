@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Mirrors the shaders in extension.js: print colours, then a multiply for
-shadows and paper light, then an OVER for highlights, ink mottle and
-flare.
+Mirrors the shaders in extension.js: ink spread and print colours, then a
+multiply for shadows and paper light, then an OVER for highlights, ink
+mottle and flare.
 """
 
 import argparse
@@ -21,6 +21,9 @@ TONE_SCALE = 8
 PAPER_BLACK = 0.1
 MID_GREY = 0.46
 MOTTLE_STRETCH = 2
+INK_SHARE = 0.3
+INK_STRENGTH = 0.6
+INK_FEATHER = 0.6
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
          "processing cellulose fibres derived from wood, rags, grasses or other "
@@ -121,12 +124,43 @@ def print_colours(b, gamut, strength):
     return np.clip(oklab_to_srgb(lab), 0, 1)
 
 
+def ink_spread(b, soak, amount):
+    """Strokes grow where the paper takes ink, and along fibres, as PRINT_SHADER."""
+    h, w = b.shape[:2]
+    y, x = np.mgrid[0:h, 0:w]
+
+    def at(dy, dx):
+        # Clamped to the image like the shader clamps to the monitor.
+        return b[np.clip(y + dy, 0, h - 1), np.clip(x + dx, 0, w - 1)]
+
+    near = np.minimum.reduce([at(1, 0), at(-1, 0), at(0, 1), at(0, -1)])
+    take = (soak[..., 2] >= 1 - INK_SHARE * amount)[..., None]
+    spread = b + (near - b) * take * INK_STRENGTH * amount
+    along = soak[..., :2] * 2 - 1
+    fibre = (np.hypot(along[..., 0], along[..., 1]) >= 0.5)[..., None]
+    angle = 0.5 * np.arctan2(along[..., 1], along[..., 0])
+    for distance in (1, 2):
+        dx = np.floor(distance * np.cos(angle) + 0.5).astype(int)
+        dy = np.floor(distance * np.sin(angle) + 0.5).astype(int)
+        far = np.minimum(at(dy, dx), at(-dy, -dx))
+        weight = fibre * INK_FEATHER * amount / distance**2
+        spread = np.minimum(spread, b + (far - b) * weight)
+    return np.minimum(b, spread)
+
+
+def tiled(path, w, h):
+    t = np.asarray(Image.open(path).convert("RGB"), np.float32) / 255
+    return np.tile(t, (h // t.shape[0] + 1, w // t.shape[1] + 1, 1))[:h, :w]
+
+
 def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
-              print_colors=0.0, grain=0.0, mottle=0.0):
+              print_colors=0.0, grain=0.0, mottle=0.0, ink=0.0):
     b = np.asarray(base.convert("RGB"), np.float32) / 255
     h, w = b.shape[:2]
     gs, gl = relief(texdir / "grain.png", w, h)
 
+    if ink > 0:
+        b = ink_spread(b, tiled(texdir / "ink.png", w, h), ink)
     if print_colors > 0:
         b = print_colours(b, GAMUT, print_colors)
     ds, dl = relief(texdir / "detail.png", w, h)
@@ -165,6 +199,7 @@ def main():
     ap.add_argument("-p", "--print-colors", type=float, default=0.0)
     ap.add_argument("-g", "--grain", type=float, default=0.0)
     ap.add_argument("--mottle", type=float, default=0.0)
+    ap.add_argument("--ink", type=float, default=0.0)
     ap.add_argument("--size", default="1600x1000")
     args = ap.parse_args()
 
@@ -174,7 +209,7 @@ def main():
         base = test_card(*map(int, args.size.split("x")))
     composite(base, args.texture, args.intensity, args.dark_balance,
               args.matte, args.brightness, args.print_colors, args.grain,
-              args.mottle).save(args.output)
+              args.mottle, args.ink).save(args.output)
 
 
 if __name__ == "__main__":

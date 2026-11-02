@@ -173,11 +173,15 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const print = new Adw.PreferencesPage({
             title: _('Print'),
             icon_name: 'printer-symbolic',
-            description: _('This effect needs the finished picture, so the whole screen is rendered offscreen and every changing frame repaints all of it. Even a blinking cursor then costs several times the GPU time of the paper effects, big changes like scrolling about the same. The paper effects are drawn in the same pass for free. A still screen costs nothing. Uses more battery on laptops.'),
+            description: _('These effects need the finished picture, so the whole screen is rendered offscreen and every changing frame repaints all of it. Even a blinking cursor then costs several times the GPU time of the paper effects, big changes like scrolling about the same. That is paid once: with one effect on, the other adds little, and the paper effects are drawn in the same pass for free. A still screen costs nothing. Uses more battery on laptops.'),
         });
         print.add(featureGroup(settings, 'print-colors-enabled', _('Print colours (experimental)'),
             _('Only colours offset print on uncoated paper can reach: calmer blues and greens, strong reds and yellows.'), [
                 percentRow(settings, 'print-colors', 100, _('Amount'), ''),
+            ]));
+        print.add(featureGroup(settings, 'ink-spread-enabled', _('Ink spread (experimental)'),
+            _('Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper.'), [
+                percentRow(settings, 'ink-spread', 100, _('Amount'), ''),
             ]));
         window.add(print);
     }

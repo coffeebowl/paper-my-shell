@@ -30,6 +30,9 @@ the settings schema and are shown in the preferences.
 - **Print colours** (experimental): limits colours to what offset print on
   uncoated paper can reach. Blues, violets and bright greens get much
   calmer, reds and yellows stay strong, greys don't change.
+- **Ink spread** (experimental): dark strokes grow a little where the
+  paper takes ink, with ragged edges, and creep along fibres in short
+  feathers, like ink on absorbent paper.
 - **Stays out of the way**: monitors showing a fullscreen window hide the
   overlay, so games and videos keep direct scanout (can be turned off).
 
@@ -74,8 +77,8 @@ used: a few seconds in a separate `gjs` process, so the shell never
 stalls. They are kept in `~/.cache/paper-my-shell@coffeebowl/` and look
 the same on every device. A new version of the generator replaces them.
 
-Each texture is three seamless tiles, uploaded once and tiled by the GPU
-(about 5.3 MB of video memory):
+Each texture is four seamless tiles, uploaded once and tiled by the GPU
+(about 5.5 MB of video memory):
 
 - detail (1024²): relief, tiled 1:1. Only small random features, so the
   repetition can't be spotted.
@@ -85,15 +88,18 @@ Each texture is three seamless tiles, uploaded once and tiled by the GPU
   the ink mottle, which follows the paper's formation.
 - grain (256²): pixel-fine fibres and grain, tiled 1:1 with its own
   strength.
+- ink (256²): fibre directions and where the paper takes ink, for ink
+  spread.
 
 Texture, matte and brightness are two full-screen passes per monitor
 (multiply, then OVER), each a single quad with a small shader. All settings
 are uniforms, so changing them never rebuilds anything.
 
-Print colours need the finished pixels, so the UI is rendered offscreen
-and one shader does print colours and the paper in a single pass instead
-of the overlay. Partial redraws would leave the offscreen copy incomplete,
-so while it is on every frame repaints the whole screen.
+Print colours and ink spread need the finished pixels, so the UI is
+rendered offscreen and one shader does them and the paper in a single pass
+instead of the overlay. Partial redraws would leave the offscreen copy
+incomplete, so while one of them is on every frame repaints the whole
+screen.
 
 ## Development
 

@@ -26,7 +26,7 @@ Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 Gio._promisify(GdkPixbuf.Pixbuf, 'new_from_stream_async');
 Gio._promisify(Gio.DBusConnection.prototype, 'call');
 
-const TILES = ['detail', 'tone', 'grain'];
+const TILES = ['detail', 'tone', 'grain', 'ink'];
 
 // Ink mottle follows the paper's formation at a quarter of its size: the
 // tone tile again, stretched only by this factor.
@@ -35,6 +35,14 @@ const MOTTLE_STRETCH = 2;
 // Size of a texel in mm the textures are drawn for, a logical pixel at
 // about 110 dpi. With true size on, tiles scale to keep it on every monitor.
 const TEXEL_MM = 0.23;
+
+// Ink spread at full amount, keep in sync with preview.py: the share of
+// the paper that takes ink, how far a pixel darkens towards its darkest
+// neighbour, and towards the ink one pixel along a fibre (a quarter of
+// that two pixels along).
+const INK_SHARE = 0.3;
+const INK_STRENGTH = 0.6;
+const INK_FEATHER = 0.6;
 
 // The print effect spans all monitors and gets their geometry as uniform
 // arrays of this length.
@@ -61,6 +69,7 @@ const SYNC_KEYS = [
     'matte-enabled', 'matte', 'mottle',
     'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
+    'ink-spread-enabled', 'ink-spread',
     'hide-in-fullscreen',
 ];
 
@@ -142,12 +151,15 @@ const OVER_SHADER = `${OVERLAY_RELIEF}${paperOverGlsl('cogl_sampler1')}
 cogl_color_out = over;
 `;
 
-// Print colours need the finished pixels, so the UI is rendered offscreen
-// first. The paper is then applied in the same pass instead of the overlay.
+// Print colours and ink spread need the finished pixels, so the UI is
+// rendered offscreen first. The paper is then applied in the same pass
+// instead of the overlay.
 const PRINT_UNIFORMS = `${UNIFORMS}
 uniform float u_print;
+uniform float u_ink;
 uniform vec2 u_origin;
 uniform vec2 u_extent;
+uniform vec2 u_pixel;
 uniform vec4 u_monitors[${MAX_MONITORS}];
 uniform float u_tile_sizes[${MAX_MONITORS}];
 uniform sampler2D u_screen;
@@ -156,7 +168,21 @@ uniform sampler2D u_tone;
 uniform sampler2D u_grain_tile;
 uniform sampler2D u_gamut;
 uniform vec2 u_gamut_size;
+uniform sampler2D u_ink_tile;
 `;
+
+/**
+ * GLSL reading the offscreen copy `offset` away from `st`, kept on the
+ * monitor bounds `lo` and `hi`: around and between the monitors the copy is
+ * black, which would darken the edges.
+ *
+ * @param {string} offset - GLSL vec2 expression
+ * @returns {string}
+ */
+function neighbourGlsl(offset) {
+    return `texture2D(u_screen, clamp(st + ${offset}, lo, hi)).rgb`;
+}
+
 const PRINT_SHADER = `
 vec2 st = cogl_tex_coord0_in.st;
 vec4 color = texture2D(u_screen, st) * cogl_color_in;
@@ -166,10 +192,44 @@ vec3 c = color.a > 0.0 ? color.rgb / color.a : color.rgb;
 // own tile size.
 vec2 pos = u_origin + st * u_extent;
 vec2 paper_uv = pos / u_tile_sizes[0];
+vec4 monitor = vec4(u_origin, u_extent);
 for (int i = 0; i < ${MAX_MONITORS}; i++) {
     vec4 m = u_monitors[i];
-    if (pos.x >= m.x && pos.y >= m.y && pos.x < m.x + m.z && pos.y < m.y + m.w)
+    if (pos.x >= m.x && pos.y >= m.y && pos.x < m.x + m.z && pos.y < m.y + m.w) {
         paper_uv = (pos - m.xy) / u_tile_sizes[i];
+        monitor = m;
+    }
+}
+
+// Ink soaks into the paper (u_ink_tile, see papergen.js ink()). Strokes
+// grow towards their darkest neighbour, but only where the paper takes ink,
+// on its fibres and raised grain: a hard threshold, so edges turn ragged
+// instead of soft. Where a fibre runs through a pixel, ink also creeps along
+// it, the short feathers of ink on absorbent paper, fading with the square
+// of the distance. Everything scales with the amount. Never lightens.
+if (u_ink > 0.0) {
+    vec3 soak = texture2D(u_ink_tile, paper_uv * u_grain_ratio).rgb;
+    vec2 lo = (monitor.xy - u_origin) / u_extent + 0.5 * u_pixel;
+    vec2 hi = (monitor.xy + monitor.zw - u_origin) / u_extent - 0.5 * u_pixel;
+    vec3 near = min(
+        min(${neighbourGlsl('vec2(u_pixel.x, 0.0)')}, ${neighbourGlsl('vec2(-u_pixel.x, 0.0)')}),
+        min(${neighbourGlsl('vec2(0.0, u_pixel.y)')}, ${neighbourGlsl('vec2(0.0, -u_pixel.y)')}));
+    float take = step(1.0 - ${INK_SHARE.toFixed(2)} * u_ink, soak.b);
+    vec3 spread = c + (near - c) * take * ${INK_STRENGTH.toFixed(2)} * u_ink;
+    vec2 along = soak.rg * 2.0 - 1.0;
+    if (length(along) >= 0.5) {
+        // Doubled angle back to the fibre, in whole pixels.
+        float angle = 0.5 * atan(along.y, along.x);
+        vec2 fibre = vec2(cos(angle), sin(angle));
+        for (int i = 1; i <= 2; i++) {
+            float distance = float(i);
+            vec2 reach = floor(distance * fibre + 0.5) * u_pixel;
+            vec3 far = min(${neighbourGlsl('reach')}, ${neighbourGlsl('-reach')});
+            spread = min(spread,
+                c + (far - c) * ${INK_FEATHER.toFixed(2)} * u_ink / (distance * distance));
+        }
+    }
+    c = min(c, spread);
 }
 
 // Print can't reach the colourfulness of emitted light, least of all in
@@ -279,9 +339,10 @@ function setUniforms(pipeline, values) {
 }
 
 /**
- * Print colours and paper in one pass over an offscreen copy of the UI.
- * Only attached while print colours are on, since rendering offscreen costs
- * an extra full-screen pass on every change. The overlay is hidden then.
+ * Ink spread, print colours and paper in one pass over an offscreen copy of
+ * the UI. Only attached while one of the first two is on, since rendering
+ * offscreen costs an extra full-screen pass on every change. The overlay is
+ * hidden then.
  */
 const PaperPrintEffect = GObject.registerClass(
 class PaperPrintEffect extends Shell.GLSLEffect {
@@ -314,13 +375,13 @@ class PaperPrintEffect extends Shell.GLSLEffect {
         // table go next to it.
         const pipeline = this.get_pipeline();
         if (pipeline !== this._pipeline) {
-            const {detail, tone, grain, gamut} = this._textures;
-            [detail, tone, grain, gamut].forEach((texture, i) => {
+            const {detail, tone, grain, gamut, ink} = this._textures;
+            [detail, tone, grain, gamut, ink].forEach((texture, i) => {
                 pipeline.set_layer_texture(i + 1, texture);
                 pipeline.set_layer_wrap_mode(i + 1, texture === gamut
                     ? Cogl.PipelineWrapMode.CLAMP_TO_EDGE : Cogl.PipelineWrapMode.REPEAT);
             });
-            ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_gamut'].forEach((name, layer) =>
+            ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_gamut', 'u_ink_tile'].forEach((name, layer) =>
                 pipeline.set_uniform_1i(pipeline.get_uniform_location(name), layer));
             this._pipeline = pipeline;
         }
@@ -329,9 +390,10 @@ class PaperPrintEffect extends Shell.GLSLEffect {
         // children has no paint volume (common with real windows), in local
         // coordinates: right/bottom edge rounded up past 0.75 px of padding,
         // the size rounded plus 3 px, the rest goes to the left/top
-        // (_clutter_actor_box_enlarge_for_effects). uiGroup sits at the
-        // stage origin, so this maps straight back to stage coordinates and
-        // the paper lines up with the overlay.
+        // (_clutter_actor_box_enlarge_for_effects), then scaled by the
+        // rounded up resource scale. uiGroup sits at the stage origin, so
+        // this maps straight back to stage coordinates and the paper lines
+        // up with the overlay.
         const actor = this.get_actor();
         const volume = actor.get_paint_volume();
         let x1, y1, x2, y2;
@@ -348,6 +410,7 @@ class PaperPrintEffect extends Shell.GLSLEffect {
         y2 = Math.ceil(y2 + 0.75);
         x1 = x2 - width - 3;
         y1 = y2 - height - 3;
+        const scale = Math.ceil(actor.get_resource_scale());
         setUniforms(pipeline, {
             ...this._values,
             tone_ratio: this._textures.toneRatio,
@@ -355,6 +418,7 @@ class PaperPrintEffect extends Shell.GLSLEffect {
             gamut_size: this._textures.gamutSize,
             origin: [x1, y1],
             extent: [x2 - x1, y2 - y1],
+            pixel: [1 / Math.ceil((x2 - x1) * scale), 1 / Math.ceil((y2 - y1) * scale)],
         });
         super.vfunc_paint_target(node, paintContext);
     }
@@ -667,7 +731,7 @@ class PaperOverlay {
             pruneCache(this._cacheDir).catch(e =>
                 console.error(`Paper my Shell: cannot clean up the texture cache: ${e.message}`));
         }
-        const [detail, tone, grain, gamut] = await Promise.all([
+        const [detail, tone, grain, ink, gamut] = await Promise.all([
             ...files.map(file => loadTexture(file, cancellable)),
             loadTexture(this._extension.dir.get_child('print-gamut.png'), cancellable),
         ]);
@@ -676,6 +740,7 @@ class PaperOverlay {
             tone,
             grain,
             gamut,
+            ink,
             detailSize: detail.get_width(),
             toneRatio: detail.get_width() / (tone.get_width() * TONE_SCALE),
             grainRatio: detail.get_width() / grain.get_width(),
@@ -781,6 +846,7 @@ class PaperOverlay {
             brightness: brightness * matteLevel(lift),
         };
         const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;
+        const ink = s.get_boolean('ink-spread-enabled') ? this._double('ink-spread') : 0;
 
         // A covered fullscreen window can't be scanned out directly.
         const monitors = Main.layoutManager.monitors;
@@ -789,7 +855,7 @@ class PaperOverlay {
 
         // The print effect spans all monitors, so any fullscreen window
         // turns it off and the overlay takes over again.
-        const printActive = print > 0 && !monitors.some(m => fullscreen(m.index));
+        const printActive = (print > 0 || ink > 0) && !monitors.some(m => fullscreen(m.index));
         if (printActive) {
             if (!this._print) {
                 this._print = new PaperPrintEffect(this._textures);
@@ -808,6 +874,7 @@ class PaperOverlay {
             this._print.setValues({
                 ...values,
                 print,
+                ink,
                 monitors: slots.map(m => m ? [m.x, m.y, m.width, m.height] : [0, 0, 0, 0]),
                 tile_sizes: slots.map((m, i) => [this._tileSize(m ? i : 0)]),
             });

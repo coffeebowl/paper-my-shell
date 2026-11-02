@@ -2,7 +2,7 @@
  * Seamless paper textures, generated on the device from a seed, so every
  * device gets the same paper.
  *
- * A texture is three tiles, each RGBA bytes. They are signed shading,
+ * A texture is four tiles, each RGBA bytes. Three are signed shading,
  * stored as grey + alpha and composited with normal alpha blending: black
  * with some alpha darkens what is below (like multiply), white lightens it
  * (like screen). That way the texture modulates the content instead of
@@ -16,6 +16,7 @@
  * - grain: pixel-fine fibres and grain, tiled 1:1 with its own strength.
  *   Breaks up the rounded tooth of the detail tile, which on its own reads
  *   as leather rather than paper.
+ * - ink: where ink soaks in, for ink spread, on the grain tile's grid.
  *
  * Sizes follow a logical pixel of about 0.23 mm (110 dpi). Everything is
  * computed on a periodic domain via FFT, so tiles repeat without seams.
@@ -252,10 +253,14 @@ class Field {
         return g;
     }
 
-    _filter(filter, a) {
+    /**
+     * Filter one real field, or two at once as real and imaginary part,
+     * which works because the filter is real and symmetric.
+     */
+    _filter(filter, a, b = null) {
         const n = this.n;
         const re = Float64Array.from(a);
-        const im = new Float64Array(n * n);
+        const im = b ? Float64Array.from(b) : new Float64Array(n * n);
         // Transposing only twice, the spectrum stays transposed.
         this._fft.rows(re, im, false);
         transpose(re, n);
@@ -269,7 +274,7 @@ class Field {
         transpose(re, n);
         transpose(im, n);
         this._fft.rows(re, im, true);
-        return re;
+        return b ? [re, im] : re;
     }
 
     /** Periodic (anisotropic) gaussian blur, sigma in px. */
@@ -310,11 +315,16 @@ class Field {
     /**
      * Short thin raised strands, wrapped around the tile edges. A pixel
      * gets each strand once, however often the strand passes it.
+     *
+     * With directions, also returns where they run as doubled-angle
+     * vectors (cos 2a, sin 2a): a fibre has no front and back.
      */
-    fibers(count, length, scale) {
+    fibers(count, length, scale, directions = false) {
         const n = this.n;
         const canvas = new Float64Array(n * n);
+        const along = [new Float64Array(n * n), new Float64Array(n * n)];
         const seen = new Int32Array(n * n);
+        const lastAngle = new Float64Array(n * n);
         for (let f = 1; f <= count; f++) {
             let x = this.rng.uniform(0, n);
             let y = this.rng.uniform(0, n);
@@ -332,14 +342,21 @@ class Field {
                     seen[p] = f;
                     pixels.push(p);
                 }
+                lastAngle[p] = a;
             }
             const weight = this.rng.uniform(0.5, 1.0);
-            for (const p of pixels)
+            for (const p of pixels) {
                 canvas[p] += weight;
+                along[0][p] += weight * Math.cos(2 * lastAngle[p]);
+                along[1][p] += weight * Math.sin(2 * lastAngle[p]);
+            }
         }
         const a = this.blur(canvas, 0.9 * scale);
         const d = std(a) + 1e-9;
-        return map(a, v => v / d);
+        const height = map(a, v => v / d);
+        if (!directions)
+            return height;
+        return [height, this._filter(this._gaussian(0.9 * scale, 1, 0), ...along)];
     }
 }
 
@@ -360,14 +377,48 @@ function detail(n, preset, seed, scale) {
     return shade(f, h, p.bump, p.cavity, scale);
 }
 
-/** Pixel-fine surface: loose fibres over a fine grain. */
-function grain(preset, seed) {
+/** Height map and fibre directions of the grain tile. */
+function grainSurface(preset, seed) {
     const p = PRESETS[preset];
     const f = new Field(GRAIN_SIZE, seed + 2);
     const noise = f.noise(0.45);
-    const fibers = f.fibers(Math.trunc(GRAIN_SIZE ** 2 / 60), 10, 0.6);
+    const [fibers, along] = f.fibers(Math.trunc(GRAIN_SIZE ** 2 / 60), 10, 0.6, true);
     const h = map(noise, (v, i) => p.grainNoise * v + p.grainFibers * fibers[i]);
+    return [f, h, along];
+}
+
+/** Pixel-fine surface: loose fibres over a fine grain. */
+function grain(preset, seed) {
+    const [f, h] = grainSurface(preset, seed);
     return shade(f, h, 1.2, 0, 1.0);
+}
+
+/**
+ * Where ink soaks in, as RGBA bytes. Red and green: fibre direction as a
+ * doubled-angle vector, its length how clearly a fibre runs through the
+ * texel. Blue: how much the paper takes ink, most on fibres and raised
+ * grain, ranked so a threshold picks a fixed share.
+ */
+function ink(preset, seed) {
+    const [, h, [ax, ay]] = grainSurface(preset, seed);
+    const size = h.length;
+    const top = percentile(map(ax, (v, i) => Math.hypot(v, ay[i])), 99);
+    const order = Uint32Array.from({length: size}, (_, i) => i).sort((a, b) => h[b] - h[a]);
+    const absorb = new Float64Array(size);
+    order.forEach((p, rank) => (absorb[p] = 1 - rank / (size - 1)));
+    const bytes = new Uint8Array(size * 4);
+    for (let i = 0; i < size; i++) {
+        let x = ax[i] / top;
+        let y = ay[i] / top;
+        const length = Math.max(1, Math.hypot(x, y));
+        x /= length;
+        y /= length;
+        bytes[i * 4] = toByte(0.5 + 0.5 * x);
+        bytes[i * 4 + 1] = toByte(0.5 + 0.5 * y);
+        bytes[i * 4 + 2] = toByte(absorb[i]);
+        bytes[i * 4 + 3] = 255;
+    }
+    return bytes;
 }
 
 /** Height map to signed shading in [-1, 1]. */
@@ -444,12 +495,13 @@ function encode(m, strength = 1.0) {
  * @param {number} [options.seed]
  * @param {number} [options.size] - detail tile size
  * @param {number} [options.scale] - feature scale, e.g. 2 for a @2x texture
- * @returns {{detail: Tile, tone: Tile, grain: Tile}}
+ * @returns {{detail: Tile, tone: Tile, grain: Tile, ink: Tile}}
  */
 export function generate(name, {seed = 1, size = DETAIL_SIZE, scale = 1} = {}) {
     return {
         detail: {size, pixels: encode(detail(size, name, seed, scale))},
         tone: {size: TONE_SIZE, pixels: encode(tone(seed), PRESETS[name].formation)},
         grain: {size: GRAIN_SIZE, pixels: encode(grain(name, seed))},
+        ink: {size: GRAIN_SIZE, pixels: ink(name, seed)},
     };
 }

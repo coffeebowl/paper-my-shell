@@ -69,7 +69,7 @@ The multiply also warms the white a little. There is no light falloff
 across the screen: it is still a monitor, and the illusion shouldn't fight
 that.
 
-## Grain, mottle, true size
+## Grain, mottle, ink spread, true size
 
 - **Grain.** The detail tile's rounded tooth, shaded on its own, reads as
   leather. A third tile (256², 1:1) with pixel-fine fibres and grain
@@ -80,6 +80,33 @@ that.
   tone tile again at a quarter of its size (stretched 2× instead of 8×),
   added to the OVER pass. `d + (1 − d) · a` only shows on dark areas,
   so light ones stay clean and it costs one texture lookup.
+- **Ink spread.** Needs neighbouring pixels, so it runs in the offscreen
+  pass with print colours. Real ink on uncoated paper grows strokes with
+  sharp, ragged edges (boundary roughening, see MoXi) and feathers along
+  fibres. Averaging the four neighbours would only be a one-sided blur.
+  Instead:
+  - An ink tile per texture, on the grain tile's grid: fibre direction as
+    a doubled-angle vector (a fibre has no front and back) and
+    absorbency, the grain height ranked to a uniform spread, so fibres
+    and raised grain take ink first. Ink wets the fibres and wicks along
+    them and into the pores between them; the pores are far below a
+    pixel, the fibres are not. MoXi likewise eases the flow where its
+    fibre texture has strands.
+  - A pixel darkens towards its darkest neighbour (strokes grow) only
+    where absorbency passes a hard threshold, so the edge turns ragged
+    but stays sharp. At full amount 30 % of the paper takes ink, 60 %
+    strength.
+  - On a fibre it also darkens towards the ink one and two whole pixels
+    along it, the feathers, weighted 1/d² so they fade instead of
+    standing out. Whole pixels keep it independent of filtering.
+  - Everything scales with the amount, feathers included, or even 1 %
+    would show hard outliers. Growing a full pixel would make text
+    illegible, real dot gain is well below 0.23 mm.
+  - Neighbours are clamped to the pixel's monitor. Around and between
+    the monitors the offscreen copy is black, which would otherwise ink
+    the outermost pixels.
+  - Cost: the four neighbours, one ink lookup and up to four along the
+    fibre, little next to the offscreen pass itself.
 - **True size.** Mutter's `DisplayConfig.GetResources` reports each
   output's size in mm (from EDID). Tiles are scaled so a texel stays
   0.23 mm, the logical pixel size the textures were made on (about
@@ -188,6 +215,8 @@ makes stochastic textures tileable.
 - **Leather:** Worley cells as pores and creases, low relief.
 
 ### Sources
+
+- [MoXi: real-time ink dispersion in absorbent paper](https://www.researchgate.net/publication/220184655_MoXi_real-time_ink_dispersion_in_absorbent_paper)
 
 - [Survey of Procedural Methods for Two-Dimensional Texture Generation](https://pmc.ncbi.nlm.nih.gov/articles/PMC7070409/)
 - [Real-Time Procedural Textures (finite-difference bump shading)](https://faculty.cc.gatech.edu/~turk/my_papers/real_time_textures.pdf)

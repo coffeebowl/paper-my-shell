@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.paper-my-shell"
+          path="/org/gnome/shell/extensions/paper-my-shell/">
+    <key name="enabled" type="b">
+      <default>true</default>
+      <summary>Run the extension's effects</summary>
+    </key>
+
+    <key name="texture-enabled" type="b">
+      <default>true</default>
+      <summary>Show the paper texture</summary>
+    </key>
+    <key name="texture" type="s">
+      <choices>
+        <!-- In the order shown: everyday use first. -->
+        <choice value="recycled"/>
+        <choice value="drawing"/>
+        <choice value="watercolor"/>
+      </choices>
+      <default>'recycled'</default>
+      <summary>Texture</summary>
+    </key>
+    <key name="intensity" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.04</default>
+      <summary>Texture intensity</summary>
+    </key>
+    <key name="dark-balance" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.4</default>
+      <summary>Texture strength on dark surfaces</summary>
+      <description>Relative to light surfaces. 1 makes the relief equally strong on both.</description>
+    </key>
+
+    <key name="hide-in-fullscreen" type="b">
+      <default>true</default>
+      <summary>Hide the overlay on monitors showing a fullscreen window</summary>
+    </key>
+  </schema>
+</schemalist>

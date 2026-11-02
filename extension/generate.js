@@ -1,4 +1,6 @@
-// Generate a texture and write its tiles as PNGs, e.g. for tools/preview.py.
+// Generate a texture and write its tiles as PNGs. The extension runs this in
+// a process of its own: it takes a few seconds and a few hundred MB, which
+// must not stall the compositor. tools/preview.py reads the same files.
 //
 // Usage: gjs -m generate.js PRESET DIR [--size N] [--scale S] [--seed N]
 

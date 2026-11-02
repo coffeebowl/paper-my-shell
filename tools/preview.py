@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Two passes, as the overlay will draw them: a multiply for shadows, then
-an OVER for highlights.
+Mirrors the shaders in extension.js: a multiply for shadows, then an OVER
+for highlights.
 """
 
 import argparse

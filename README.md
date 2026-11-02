@@ -3,10 +3,67 @@
 A GNOME Shell extension that lays a realistic paper texture over the whole
 screen, so it reads more like print than like a glowing panel.
 
-## Textures
+Everything is drawn by the compositor on top of the shell, so it covers
+every app and the panel alike. Nothing animates: a still screen costs
+nothing.
 
-The textures are generated from a seed, so they come out the same on every
-device: recycled, drawing and watercolor paper. Each is two seamless tiles:
+## Features
+
+The defaults come from the settings schema and are shown in the
+preferences.
+
+- **Paper texture**: a shaded relief of tooth, fibres and pulp formation,
+  lit from the upper left. Shadows multiply the content and highlights
+  lighten it, so nothing gets pulled towards grey and text keeps its
+  contrast. Shadows show on light surfaces, highlights on dark ones; how
+  strong it is on dark surfaces is adjustable.
+- **Three papers**: recycled, drawing and watercolor.
+- **Stays out of the way**: monitors showing a fullscreen window hide the
+  overlay, so games and videos keep direct scanout (can be turned off).
+
+## Requirements
+
+GNOME Shell 50.
+
+## Installation
+
+From source:
+
+```sh
+git clone https://github.com/coffeebowl/paper-my-shell.git
+cd paper-my-shell
+make install
+```
+
+Then log out and back in (on Wayland the shell can't reload extensions)
+and enable it:
+
+```sh
+gnome-extensions enable paper-my-shell@coffeebowl
+```
+
+To remove it again, uninstall it and delete its texture cache:
+
+```sh
+gnome-extensions uninstall paper-my-shell@coffeebowl
+rm -r ~/.cache/paper-my-shell@coffeebowl
+```
+
+## Usage
+
+The **Paper** toggle in Quick Settings turns everything on and off. Its
+menu has the texture and its intensity. Everything else is in the
+preferences (Extensions app, or **Settings** in that menu).
+
+## How it works
+
+The textures are generated on the device, the first time each one is
+used: a few seconds in a separate `gjs` process, so the shell never
+stalls. They are kept in `~/.cache/paper-my-shell@coffeebowl/` and look
+the same on every device. A new version of the generator replaces them.
+
+Each texture is two seamless tiles, uploaded once and tiled by the GPU
+(about 5 MB of video memory):
 
 - detail (1024²): relief, tiled 1:1. Only small random features, so the
   repetition can't be spotted.
@@ -14,15 +71,37 @@ device: recycled, drawing and watercolor paper. Each is two seamless tiles:
   only every 4096 px. Large features in the detail tile would make the
   1024 px grid obvious on big screens.
 
-`extension/papergen.js` has the generator and its presets,
-`extension/generate.js` writes a texture as PNGs. `tools/preview.py`
-composites one over a test card or a screenshot; it needs numpy and
-Pillow, `make venv` sets them up in `.venv`:
+The paper is two full-screen passes per monitor (multiply, then OVER),
+each a single quad with a small shader. All settings are uniforms, so
+changing them never rebuilds anything.
+
+## Development
+
+- `extension/`: the extension as it is packed. `extension.js` has the
+  shaders and the overlay, `prefs.js` the preferences, `papergen.js` the
+  texture generator and its presets, `generate.js` runs it and writes
+  PNGs.
+- `extension/schemas/`: the settings, their defaults and ranges, and the
+  list of textures.
+- `tools/preview.py`: mirrors the shaders in numpy and composites a
+  texture over a test card or a screenshot.
+
+`preview.py` needs numpy and Pillow; `make venv` sets them up in `.venv`.
+
+### Textures
+
+A texture is a preset in `papergen.js` and a choice of the `texture` key
+in the schema, in the order shown. To look at one without the shell:
 
 ```sh
 gjs -m extension/generate.js watercolor /tmp/w
 .venv/bin/python tools/preview.py /tmp/w -i 0.15 -o /tmp/preview.png
 ```
+
+`preview.py` matches the compositor to within 1–2 levels.
+
+See [docs/texture-research.md](docs/texture-research.md) for how to make
+believable textures and ideas for more materials.
 
 ## License
 

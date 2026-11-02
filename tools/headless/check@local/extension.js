@@ -77,6 +77,19 @@ async function run() {
     extension.stateObj.openPreferences();
     await wait(5000);
     await shot('prefs');
+
+    // The paper stays on the lock screen, the toggle doesn't.
+    Main.screenShield.lock(false);
+    await wait(3000);
+    console.log(`PAPERTEST locked=${Main.sessionMode.isLocked} state=${extension.state} ` +
+        `overlays=${global.stage.get_children().filter(a => a.name === 'paper-my-shell-overlay').length} ` +
+        `toggle-visible=${toggle.visible}`);
+    await shot('locked');
+
+    Main.screenShield.deactivate(false);
+    await wait(2000);
+    console.log(`PAPERTEST unlocked=${!Main.sessionMode.isLocked} toggle-visible=${toggle.visible}`);
+    await shot('unlocked');
 }
 
 export default class {

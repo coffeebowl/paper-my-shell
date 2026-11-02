@@ -4,6 +4,7 @@
   "description": "Lays a realistic paper texture over the whole screen. The texture is a static GPU tile, so it costs next to nothing.",
   "url": "https://github.com/coffeebowl/paper-my-shell",
   "shell-version": ["50"],
+  "session-modes": ["user", "unlock-dialog"],
   "settings-schema": "org.gnome.shell.extensions.paper-my-shell",
   "version-name": "0.1"
 }

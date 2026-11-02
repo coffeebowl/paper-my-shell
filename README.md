@@ -4,8 +4,8 @@ A GNOME Shell extension that lays a realistic paper texture over the whole
 screen, so it reads more like print than like a glowing panel.
 
 Everything is drawn by the compositor on top of the shell, so it covers
-every app and the panel alike. Nothing animates: a still screen costs
-nothing.
+every app, the panel and the lock screen alike. Nothing animates: a still
+screen costs nothing.
 
 ## Features
 

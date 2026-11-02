@@ -840,9 +840,17 @@ class PaperIndicator extends SystemIndicator {
     _init(extension, settings, overlay) {
         super._init();
         this.quickSettingsItems.push(new PaperToggle(extension, settings, overlay));
+
+        // The extension keeps running on the lock screen so the paper stays,
+        // but settings are not for whoever stands at the locked machine.
+        const sync = () => this.quickSettingsItems.forEach(item =>
+            (item.visible = !Main.sessionMode.isLocked));
+        Main.sessionMode.connectObject('updated', sync, this);
+        sync();
     }
 
     destroy() {
+        Main.sessionMode.disconnectObject(this);
         this.quickSettingsItems.forEach(item => item.destroy());
         super.destroy();
     }
@@ -856,6 +864,9 @@ export default class PaperMyShellExtension extends Extension {
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
     }
 
+    // The paper stays on the lock screen, so locking doesn't change how the
+    // screen looks, with the settings hidden there (PaperIndicator). Hence
+    // the unlock-dialog session mode.
     disable() {
         this._indicator.destroy();
         this._indicator = null;

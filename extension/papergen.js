@@ -2,7 +2,7 @@
  * Seamless paper textures, generated on the device from a seed, so every
  * device gets the same paper.
  *
- * A texture is two tiles, each RGBA bytes. They are signed shading,
+ * A texture is three tiles, each RGBA bytes. They are signed shading,
  * stored as grey + alpha and composited with normal alpha blending: black
  * with some alpha darkens what is below (like multiply), white lightens it
  * (like screen). That way the texture modulates the content instead of
@@ -13,6 +13,9 @@
  * - tone: low-frequency tone variation, stretched by TONE_SCALE so it
  *   repeats only every few thousand pixels. Large features would make the
  *   repetition obvious if they were part of the detail tile.
+ * - grain: pixel-fine fibres and grain, tiled 1:1 with its own strength.
+ *   Breaks up the rounded tooth of the detail tile, which on its own reads
+ *   as leather rather than paper.
  *
  * Sizes follow a logical pixel of about 0.23 mm (110 dpi). Everything is
  * computed on a periodic domain via FFT, so tiles repeat without seams.
@@ -23,6 +26,7 @@ export const TONE_SCALE = 8;
 
 const DETAIL_SIZE = 1024;
 const TONE_SIZE = 512;
+const GRAIN_SIZE = 256;
 
 export const PRESETS = {
     // Cold-press watercolour paper: pronounced rounded tooth.
@@ -30,18 +34,21 @@ export const PRESETS = {
         tooth: 1.0, toothSize: 1.7, coarse: 0.35, coarseSize: 5.0,
         fibers: 0.15, fine: 0.15, formation: 0.18,
         bump: 1.6, cavity: 0.35, aniso: 1.08,
+        grainFibers: 0.7, grainNoise: 1.0,
     },
     // Smooth drawing paper: fine grain, some fibres.
     'drawing': {
         tooth: 0.55, toothSize: 1.2, coarse: 0.2, coarseSize: 4.0,
         fibers: 0.3, fine: 0.2, formation: 0.22,
         bump: 1.4, cavity: 0.25, aniso: 1.15,
+        grainFibers: 0.5, grainNoise: 1.0,
     },
     // Recycled / newsprint: flat, fibrous, cloudy.
     'recycled': {
         tooth: 0.35, toothSize: 1.2, coarse: 0.15, coarseSize: 4.0,
         fibers: 0.45, fine: 0.25, formation: 0.4,
         bump: 1.3, cavity: 0.2, aniso: 1.0,
+        grainFibers: 1.0, grainNoise: 0.7,
     },
 };
 
@@ -353,6 +360,16 @@ function detail(n, preset, seed, scale) {
     return shade(f, h, p.bump, p.cavity, scale);
 }
 
+/** Pixel-fine surface: loose fibres over a fine grain. */
+function grain(preset, seed) {
+    const p = PRESETS[preset];
+    const f = new Field(GRAIN_SIZE, seed + 2);
+    const noise = f.noise(0.45);
+    const fibers = f.fibers(Math.trunc(GRAIN_SIZE ** 2 / 60), 10, 0.6);
+    const h = map(noise, (v, i) => p.grainNoise * v + p.grainFibers * fibers[i]);
+    return shade(f, h, 1.2, 0, 1.0);
+}
+
 /** Height map to signed shading in [-1, 1]. */
 function shade(f, h, bump, cavity, scale) {
     const n = f.n;
@@ -427,11 +444,12 @@ function encode(m, strength = 1.0) {
  * @param {number} [options.seed]
  * @param {number} [options.size] - detail tile size
  * @param {number} [options.scale] - feature scale, e.g. 2 for a @2x texture
- * @returns {{detail: Tile, tone: Tile}}
+ * @returns {{detail: Tile, tone: Tile, grain: Tile}}
  */
 export function generate(name, {seed = 1, size = DETAIL_SIZE, scale = 1} = {}) {
     return {
         detail: {size, pixels: encode(detail(size, name, seed, scale))},
         tone: {size: TONE_SIZE, pixels: encode(tone(seed), PRESETS[name].formation)},
+        grain: {size: GRAIN_SIZE, pixels: encode(grain(name, seed))},
     };
 }

@@ -16,12 +16,14 @@ the settings schema and are shown in the preferences.
   lit from the upper left. Shadows multiply the content and highlights
   lighten it, so nothing gets pulled towards grey and text keeps its
   contrast. Shadows show on light surfaces, highlights on dark ones; how
-  strong it is on dark surfaces is adjustable.
+  strong it is on dark surfaces is adjustable. A pixel-fine grain layer on
+  top keeps the rounded tooth from looking like leather.
 - **Three papers**: recycled, drawing and watercolor.
 - **Matte**: the contrast of print instead of a screen. Even the darkest
   ink reflects some light, so blacks lift and turn to charcoal at the
   maximum, as on uncoated paper. Whites drop and get a touch warmer, so
-  mid grey and the overall brightness stay the same.
+  mid grey and the overall brightness stay the same. Ink mottle lightens
+  dark areas in soft patches, where ink soaked in unevenly.
 - **Brightness**: dims the whole screen.
 - **Print colours** (experimental): limits colours to what offset print on
   uncoated paper can reach. Blues, violets and bright greens get much
@@ -70,14 +72,17 @@ used: a few seconds in a separate `gjs` process, so the shell never
 stalls. They are kept in `~/.cache/paper-my-shell@coffeebowl/` and look
 the same on every device. A new version of the generator replaces them.
 
-Each texture is two seamless tiles, uploaded once and tiled by the GPU
-(about 5 MB of video memory):
+Each texture is three seamless tiles, uploaded once and tiled by the GPU
+(about 5.3 MB of video memory):
 
 - detail (1024²): relief, tiled 1:1. Only small random features, so the
   repetition can't be spotted.
 - tone (512²): low-frequency tone variation, stretched 8× so it repeats
   only every 4096 px. Large features in the detail tile would make the
-  1024 px grid obvious on big screens.
+  1024 px grid obvious on big screens. Sampled again at 2×, it also gives
+  the ink mottle, which follows the paper's formation.
+- grain (256²): pixel-fine fibres and grain, tiled 1:1 with its own
+  strength.
 
 Texture, matte and brightness are two full-screen passes per monitor
 (multiply, then OVER), each a single quad with a small shader. All settings

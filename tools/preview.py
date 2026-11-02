@@ -2,7 +2,8 @@
 """Composite a paper texture over a screenshot (or a test card).
 
 Mirrors the shaders in extension.js: print colours, then a multiply for
-shadows and paper light, then an OVER for highlights and flare.
+shadows and paper light, then an OVER for highlights, ink mottle and
+flare.
 """
 
 import argparse
@@ -19,6 +20,7 @@ GAMUT = Path(__file__).resolve().parent.parent / "extension" / "print-gamut.png"
 TONE_SCALE = 8
 PAPER_BLACK = 0.1
 MID_GREY = 0.46
+MOTTLE_STRETCH = 2
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
          "processing cellulose fibres derived from wood, rags, grasses or other "
@@ -120,16 +122,19 @@ def print_colours(b, gamut, strength):
 
 
 def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
-              print_colors=0.0):
+              print_colors=0.0, grain=0.0, mottle=0.0):
     b = np.asarray(base.convert("RGB"), np.float32) / 255
     h, w = b.shape[:2]
+    gs, gl = relief(texdir / "grain.png", w, h)
 
     if print_colors > 0:
         b = print_colours(b, GAMUT, print_colors)
     ds, dl = relief(texdir / "detail.png", w, h)
     ts, tl = relief(texdir / "tone.png", w, h, TONE_SCALE)
-    shadow = 1 - (1 - ds) * (1 - ts)
-    light = 1 - (1 - dl) * (1 - tl)
+    shadow = 1 - (1 - ds) * (1 - ts) * (1 - grain * gs)
+    light = 1 - (1 - dl) * (1 - tl) * (1 - grain * gl)
+    ms, ml = relief(texdir / "tone.png", w, h, MOTTLE_STRETCH)
+    cloud = (mottle * (0.5 + 0.5 * (ml - ms)))[..., None]
 
     flare = matte_lift(matte)
     brightness = brightness * matte_level(flare)
@@ -138,11 +143,12 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
     paper = brightness * np.array([1, 1 - 0.04 * matte, 1 - 0.12 * matte])
     b = b * paper * (1 - intensity * shadow)[..., None]
 
-    # OVER pass: highlights over the light paper reflects from black.
+    # OVER pass: highlights over ink mottle over the light paper reflects
+    # from black.
     hl = (intensity * balance * light)[..., None]
     color = np.array([1, 0.97, 0.92]) * flare
-    c = hl + color * (1 - hl)
-    a = hl + flare * (1 - hl)
+    c = hl + (cloud + color * (1 - cloud)) * (1 - hl)
+    a = hl + (cloud + flare * (1 - cloud)) * (1 - hl)
     b = b * (1 - a) + c * brightness
     return Image.fromarray((np.clip(b, 0, 1) * 255 + 0.5).astype(np.uint8))
 
@@ -157,6 +163,8 @@ def main():
     ap.add_argument("-m", "--matte", type=float, default=0.0)
     ap.add_argument("--brightness", type=float, default=1.0)
     ap.add_argument("-p", "--print-colors", type=float, default=0.0)
+    ap.add_argument("-g", "--grain", type=float, default=0.0)
+    ap.add_argument("--mottle", type=float, default=0.0)
     ap.add_argument("--size", default="1600x1000")
     args = ap.parse_args()
 
@@ -165,7 +173,8 @@ def main():
     else:
         base = test_card(*map(int, args.size.split("x")))
     composite(base, args.texture, args.intensity, args.dark_balance,
-              args.matte, args.brightness, args.print_colors).save(args.output)
+              args.matte, args.brightness, args.print_colors, args.grain,
+              args.mottle).save(args.output)
 
 
 if __name__ == "__main__":

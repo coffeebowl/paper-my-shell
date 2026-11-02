@@ -69,6 +69,18 @@ The multiply also warms the white a little. There is no light falloff
 across the screen: it is still a monitor, and the illusion shouldn't fight
 that.
 
+## Grain and mottle
+
+- **Grain.** The detail tile's rounded tooth, shaded on its own, reads as
+  leather. A third tile (256², 1:1) with pixel-fine fibres and grain
+  breaks that up. Its strength is relative to the intensity, at 0.5 the
+  pixel-level detail rises by about 12 %.
+- **Ink mottle.** On uncoated paper ink soaks in unevenly along the
+  formation, so solid dark areas have soft lighter patches. That is the
+  tone tile again at a quarter of its size (stretched 2× instead of 8×),
+  added to the OVER pass. `d + (1 − d) · a` only shows on dark areas,
+  so light ones stay clean and it costs one texture lookup.
+
 ## Print colours
 
 Print can't reach the colourfulness of a screen, and how far it falls

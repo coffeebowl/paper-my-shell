@@ -25,7 +25,11 @@ Gio._promisify(Gio.FileEnumerator.prototype, 'next_files_async');
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 Gio._promisify(GdkPixbuf.Pixbuf, 'new_from_stream_async');
 
-const TILES = ['detail', 'tone'];
+const TILES = ['detail', 'tone', 'grain'];
+
+// Ink mottle follows the paper's formation at a quarter of its size: the
+// tone tile again, stretched only by this factor.
+const MOTTLE_STRETCH = 2;
 
 // The print effect spans all monitors and gets their geometry as a uniform
 // array of this length.
@@ -48,8 +52,8 @@ const NO_CLIPPED_REDRAWS = Clutter.DrawDebugFlag.DISABLE_CLIPPED_REDRAWS;
 
 // Settings that only change values or visibility, not the textures.
 const SYNC_KEYS = [
-    'texture-enabled', 'intensity', 'dark-balance',
-    'matte-enabled', 'matte',
+    'texture-enabled', 'intensity', 'dark-balance', 'grain',
+    'matte-enabled', 'matte', 'mottle',
     'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
     'hide-in-fullscreen',
@@ -58,15 +62,19 @@ const SYNC_KEYS = [
 const UNIFORMS = `
 uniform float u_intensity;
 uniform float u_balance;
+uniform float u_grain;
 uniform float u_matte;
 uniform float u_lift;
+uniform float u_mottle;
 uniform float u_brightness;
 uniform float u_tone_ratio;
+uniform float u_grain_ratio;
 `;
 
 /**
  * GLSL computing `shadow` and `light` of the paper relief at `uv`, given in
- * detail-tile coordinates. u_tone_ratio converts them to tone-tile ones.
+ * detail-tile coordinates. u_tone_ratio and u_grain_ratio convert them to
+ * the other tiles' coordinates.
  *
  * Texels are grey + alpha, premultiplied on upload: grey 0 marks a shadow,
  * grey 1 a highlight. So .r is the highlight and .a - .r the shadow amount.
@@ -74,15 +82,18 @@ uniform float u_tone_ratio;
  * @param {string} uv - GLSL expression
  * @param {string} detailSampler
  * @param {string} toneSampler
+ * @param {string} grainSampler
  * @returns {string}
  */
-function reliefGlsl(uv, detailSampler, toneSampler) {
+function reliefGlsl(uv, detailSampler, toneSampler, grainSampler) {
     return `
 vec2 uv = ${uv};
 vec4 detail = texture2D(${detailSampler}, uv);
 vec4 tone = texture2D(${toneSampler}, uv * u_tone_ratio);
-float shadow = 1.0 - (1.0 - (detail.a - detail.r)) * (1.0 - (tone.a - tone.r));
-float light = 1.0 - (1.0 - detail.r) * (1.0 - tone.r);
+vec4 grain = u_grain * texture2D(${grainSampler}, uv * u_grain_ratio);
+float shadow = 1.0 - (1.0 - (detail.a - detail.r)) * (1.0 - (tone.a - tone.r)) *
+    (1.0 - (grain.a - grain.r));
+float light = 1.0 - (1.0 - detail.r) * (1.0 - tone.r) * (1.0 - grain.r);
 `;
 }
 
@@ -95,21 +106,34 @@ vec3 multiply = u_brightness *
     (1.0 - u_intensity * shadow);
 `;
 
-// Composited OVER the screen: relief highlights, over the light paper
-// reflects even from its darkest ink, which lifts blacks. Dimmed along with
-// the rest so nothing gets brighter than the dimmed white.
-const PAPER_OVER = `
+/**
+ * GLSL composited OVER the screen: relief highlights, over uneven ink
+ * (mottle: ink soaks into the paper's cloudy formation unevenly, which
+ * lightens dark areas in patches), over the light paper reflects even from
+ * its darkest ink, which lifts blacks. Dimmed along with the rest so
+ * nothing gets brighter than the dimmed white.
+ *
+ * @param {string} toneSampler
+ * @returns {string}
+ */
+function paperOverGlsl(toneSampler) {
+    return `
+vec4 cloud = texture2D(${toneSampler}, uv * u_tone_ratio * ${(TONE_SCALE / MOTTLE_STRETCH).toFixed(1)});
+float mottle = u_mottle * (0.5 + cloud.r - 0.5 * cloud.a);
 float highlight = u_intensity * u_balance * light;
 vec4 over = vec4(vec3(highlight), highlight) +
-    vec4(vec3(1.0, 0.97, 0.92) * u_lift, u_lift) * (1.0 - highlight);
+    (vec4(vec3(mottle), mottle) +
+     vec4(vec3(1.0, 0.97, 0.92) * u_lift, u_lift) * (1.0 - mottle)) * (1.0 - highlight);
 over.rgb *= u_brightness;
 `;
+}
 
-const OVERLAY_RELIEF = reliefGlsl('cogl_tex_coord0_in.st', 'cogl_sampler0', 'cogl_sampler1');
+const OVERLAY_RELIEF = reliefGlsl('cogl_tex_coord0_in.st',
+    'cogl_sampler0', 'cogl_sampler1', 'cogl_sampler2');
 const MULTIPLY_SHADER = `${OVERLAY_RELIEF}${PAPER_MULTIPLY}
 cogl_color_out = vec4(multiply, 1.0);
 `;
-const OVER_SHADER = `${OVERLAY_RELIEF}${PAPER_OVER}
+const OVER_SHADER = `${OVERLAY_RELIEF}${paperOverGlsl('cogl_sampler1')}
 cogl_color_out = over;
 `;
 
@@ -124,6 +148,7 @@ uniform float u_tile_size;
 uniform sampler2D u_screen;
 uniform sampler2D u_detail;
 uniform sampler2D u_tone;
+uniform sampler2D u_grain_tile;
 uniform sampler2D u_gamut;
 uniform vec2 u_gamut_size;
 `;
@@ -187,7 +212,7 @@ if (u_print > 0.0 && max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)) > 1.0 / 1
             step(0.0031308, lin));
     }
 }
-${reliefGlsl('paper_uv', 'u_detail', 'u_tone')}${PAPER_MULTIPLY}${PAPER_OVER}
+${reliefGlsl('paper_uv', 'u_detail', 'u_tone', 'u_grain_tile')}${PAPER_MULTIPLY}${paperOverGlsl('u_tone')}
 c = c * multiply * (1.0 - over.a) + over.rgb;
 cogl_color_out = vec4(c * color.a, color.a);
 `;
@@ -284,13 +309,13 @@ class PaperPrintEffect extends Shell.GLSLEffect {
         // table go next to it.
         const pipeline = this.get_pipeline();
         if (pipeline !== this._pipeline) {
-            const {detail, tone, gamut} = this._textures;
-            [detail, tone, gamut].forEach((texture, i) => {
+            const {detail, tone, grain, gamut} = this._textures;
+            [detail, tone, grain, gamut].forEach((texture, i) => {
                 pipeline.set_layer_texture(i + 1, texture);
                 pipeline.set_layer_wrap_mode(i + 1, texture === gamut
                     ? Cogl.PipelineWrapMode.CLAMP_TO_EDGE : Cogl.PipelineWrapMode.REPEAT);
             });
-            ['u_screen', 'u_detail', 'u_tone', 'u_gamut'].forEach((name, layer) =>
+            ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_gamut'].forEach((name, layer) =>
                 pipeline.set_uniform_1i(pipeline.get_uniform_location(name), layer));
             this._pipeline = pipeline;
         }
@@ -321,6 +346,7 @@ class PaperPrintEffect extends Shell.GLSLEffect {
         setUniforms(pipeline, {
             ...this._values,
             tone_ratio: this._textures.toneRatio,
+            grain_ratio: this._textures.grainRatio,
             gamut_size: this._textures.gamutSize,
             origin: [x1, y1],
             extent: [x2 - x1, y2 - y1],
@@ -464,18 +490,18 @@ class PaperSurface extends Clutter.Actor {
         this._over = this._createPipeline(ctx, textures, OVER_SHADER,
             'RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))');
         this._tileSize = textures.detailSize;
-        this._values = {intensity: 0, balance: 0, lift: 0, brightness: 1};
+        this._values = {intensity: 0, balance: 0, lift: 0, mottle: 0, brightness: 1};
     }
 
     _createPipeline(ctx, textures, shader, blend) {
         const pipeline = Cogl.Pipeline.new(ctx);
-        [textures.detail, textures.tone].forEach((texture, layer) => {
+        [textures.detail, textures.tone, textures.grain].forEach((texture, layer) => {
             pipeline.set_layer_texture(layer, texture);
             pipeline.set_layer_wrap_mode(layer, Cogl.PipelineWrapMode.REPEAT);
         });
         pipeline.add_snippet(Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, UNIFORMS, shader));
         pipeline.set_blend(blend);
-        setUniforms(pipeline, {tone_ratio: textures.toneRatio});
+        setUniforms(pipeline, {tone_ratio: textures.toneRatio, grain_ratio: textures.grainRatio});
         return pipeline;
     }
 
@@ -494,7 +520,7 @@ class PaperSurface extends Clutter.Actor {
     }
 
     vfunc_paint_node(root, _paintContext) {
-        const {intensity, balance, lift, brightness} = this._values;
+        const {intensity, balance, lift, mottle, brightness} = this._values;
         const [width, height] = this.get_size();
         const tiles = [width / this._tileSize, height / this._tileSize];
         const box = new Clutter.ActorBox({x1: 0, y1: 0, x2: width, y2: height});
@@ -502,7 +528,7 @@ class PaperSurface extends Clutter.Actor {
         const passes = [];
         if (intensity > 0 || brightness < 1)
             passes.push(this._multiply);
-        if (intensity * balance > 0 || lift > 0)
+        if (intensity * balance > 0 || lift > 0 || mottle > 0)
             passes.push(this._over);
 
         for (const pipeline of passes) {
@@ -569,16 +595,18 @@ class PaperOverlay {
             pruneCache(this._cacheDir).catch(e =>
                 console.error(`Paper my Shell: cannot clean up the texture cache: ${e.message}`));
         }
-        const [detail, tone, gamut] = await Promise.all([
+        const [detail, tone, grain, gamut] = await Promise.all([
             ...files.map(file => loadTexture(file, cancellable)),
             loadTexture(this._extension.dir.get_child('print-gamut.png'), cancellable),
         ]);
         return {
             detail,
             tone,
+            grain,
             gamut,
             detailSize: detail.get_width(),
             toneRatio: detail.get_width() / (tone.get_width() * TONE_SCALE),
+            grainRatio: detail.get_width() / grain.get_width(),
             gamutSize: [gamut.get_width(), gamut.get_height()],
         };
     }
@@ -667,14 +695,17 @@ class PaperOverlay {
             return;
 
         const s = this._settings;
-        const matte = s.get_boolean('matte-enabled') ? this._double('matte') : 0;
+        const matteEnabled = s.get_boolean('matte-enabled');
+        const matte = matteEnabled ? this._double('matte') : 0;
         const lift = matteLift(matte);
         const brightness = s.get_boolean('brightness-enabled') ? this._double('brightness') : 1;
         const values = {
             intensity: s.get_boolean('texture-enabled') ? this._double('intensity') : 0,
             balance: this._double('dark-balance'),
+            grain: this._double('grain'),
             matte,
             lift,
+            mottle: matteEnabled ? this._double('mottle') : 0,
             brightness: brightness * matteLevel(lift),
         };
         const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;

@@ -32,6 +32,12 @@
       <summary>Texture strength on dark surfaces</summary>
       <description>Relative to light surfaces. 1 makes the relief equally strong on both.</description>
     </key>
+    <key name="grain" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.5</default>
+      <summary>Fine grain</summary>
+      <description>Pixel-fine fibres and grain on top of the texture, relative to its intensity. Breaks up the rounded tooth, which on its own looks like leather.</description>
+    </key>
 
     <key name="matte-enabled" type="b">
       <default>true</default>
@@ -42,6 +48,12 @@
       <default>0.02</default>
       <summary>Matte amount</summary>
       <description>Gives the screen the contrast of print: blacks lift like ink on paper, whites get dimmer and slightly warmer, mid grey stays. The maximum matches uncoated paper.</description>
+    </key>
+    <key name="mottle" type="d">
+      <range min="0.0" max="0.2"/>
+      <default>0.04</default>
+      <summary>Ink mottle</summary>
+      <description>Ink soaks into the paper unevenly and lightens dark areas in soft patches that follow the paper's formation.</description>
     </key>
 
     <key name="brightness-enabled" type="b">

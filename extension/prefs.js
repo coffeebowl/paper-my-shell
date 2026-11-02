@@ -151,11 +151,15 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
                     _('Low values look most natural.')),
                 percentRow(settings, 'dark-balance', 100, _('Dark surfaces'),
                     _('Strength on dark areas, relative to light ones.')),
+                percentRow(settings, 'grain', 100, _('Fine grain'),
+                    _('Pixel-fine fibres on top, relative to the intensity. Without it the texture looks more like leather.')),
             ]));
 
         page.add(featureGroup(settings, 'matte-enabled', _('Matte'),
             _('The contrast of print instead of a screen: blacks lift like ink on paper, whites get dimmer and slightly warmer. Overall brightness stays the same.'), [
                 percentRow(settings, 'matte', 50, _('Amount'), ''),
+                percentRow(settings, 'mottle', 20, _('Ink mottle'),
+                    _('Ink soaks in unevenly and lightens dark areas in soft patches.')),
             ]));
 
         page.add(featureGroup(settings, 'brightness-enabled', _('Brightness'),

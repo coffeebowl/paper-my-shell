@@ -108,11 +108,12 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const settings = this.getSettings();
         window._settings = settings;
 
-        // The effects share their GPU cost, so the page says what that costs.
+        // Two pages, one per way of rendering: the effects on a page share
+        // their GPU cost, so the page says what that costs.
         const page = new Adw.PreferencesPage({
             title: _('Paper'),
             icon_name: 'x-office-document-symbolic',
-            description: _('These effects share two light passes over each monitor, drawn only on frames that change anyway. The first one you turn on costs a little, the others then add nothing measurable. A still screen costs nothing.'),
+            description: _('These effects share two light passes over each monitor, drawn only on frames that change anyway. The first one you turn on costs a little, the others then add nothing measurable. A still screen costs nothing. While an effect from the Print page is on, the paper is drawn in its pass and costs nothing extra.'),
         });
 
         const general = new Adw.PreferencesGroup();
@@ -157,5 +158,16 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
                 percentRow(settings, 'matte', 50, _('Amount'), ''),
             ]));
         window.add(page);
+
+        const print = new Adw.PreferencesPage({
+            title: _('Print'),
+            icon_name: 'printer-symbolic',
+            description: _('This effect needs the finished picture, so the whole screen is rendered offscreen and every changing frame repaints all of it. Even a blinking cursor then costs several times the GPU time of the paper effects, big changes like scrolling about the same. The paper effects are drawn in the same pass for free. A still screen costs nothing. Uses more battery on laptops.'),
+        });
+        print.add(featureGroup(settings, 'print-colors-enabled', _('Print colours (experimental)'),
+            _('Only colours offset print on uncoated paper can reach: calmer blues and greens, strong reds and yellows.'), [
+                percentRow(settings, 'print-colors', 100, _('Amount'), ''),
+            ]));
+        window.add(print);
     }
 }

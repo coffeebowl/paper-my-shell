@@ -44,6 +44,17 @@
       <description>Gives the screen the contrast of print: blacks lift like ink on paper, whites get dimmer and slightly warmer, mid grey stays. The maximum matches uncoated paper.</description>
     </key>
 
+    <key name="print-colors-enabled" type="b">
+      <default>false</default>
+      <summary>Use print-like colours</summary>
+    </key>
+    <key name="print-colors" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>1.0</default>
+      <summary>Print-like colours</summary>
+      <description>Limits colours to what offset print on uncoated paper can reach. 1 is the full print gamut. Renders the whole screen offscreen first, so it costs GPU time.</description>
+    </key>
+
     <key name="hide-in-fullscreen" type="b">
       <default>true</default>
       <summary>Hide the overlay on monitors showing a fullscreen window</summary>

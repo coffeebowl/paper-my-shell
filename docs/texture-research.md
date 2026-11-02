@@ -57,7 +57,7 @@ strong. Correcting it needs extra passes that band in 8 bits. So the OVER
 pass lifts black along the straight line closest to the paper curve
 (least maximum error). Midtones come out up to 16 levels too light at the
 maximum, about 6 at the default. The exact curve would need the finished
-pixels, which costs a full repaint on every change.
+pixels, like print colours, which costs a full repaint on every change.
 
 Lifting black alone made the whole screen lighter. So the curve is scaled
 until 18 % grey (L* 50) keeps its value: at the maximum black goes to 40,
@@ -68,6 +68,72 @@ brightness factor on both passes.
 The multiply also warms the white a little. There is no light falloff
 across the screen: it is still a monitor, and the illusion shouldn't fight
 that.
+
+## Print colours
+
+Print can't reach the colourfulness of a screen, and how far it falls
+short depends on the hue. From Fogra's data for offset print on uncoated
+paper (FOGRA52), as a share of sRGB's chroma at the most colourful point
+of each hue, in OKLCH:
+
+| hue | yellow | red | green | blue, violet |
+|---|---|---|---|---|
+| print / sRGB | ~100 % | ~80 % | ~60 % | 35–55 % |
+
+Cyans at 210–225° are the exception, print reaches more there than sRGB.
+
+Compressing HSV saturation and keeping the HSV value treats all hues
+alike in RGB but not to the eye: blue gets 7 OKLab lightness points
+lighter and shifts towards violet, red turns salmon, green barely changes.
+That is close to the opposite of print.
+
+Blending can't do this either: it works per channel, so lifting green and
+blue of a red pixel also lifts them in black. The print colours setting
+therefore runs a `Shell.GLSLEffect` on `uiGroup` that sees the finished
+pixels and maps them into the print gamut in OKLab:
+
+- The gamut comes from the convex hull of the FOGRA52 patches, mapped
+  media-relative with black point compensation, so it only limits chroma.
+  `tools/printgamut.py` stores it as a 73 × 33 table
+  (`print-gamut.png`).
+- Colours move towards the grey at the lightness of their hue's most
+  colourful print colour (the cusp). Keeping lightness instead would
+  bleach yellows and light greens: print yellow peaks at lightness 0.89,
+  sRGB yellow sits at 0.97, where print has almost no chroma left.
+- A soft knee starts at 80 % of the boundary, so gradients stay smooth.
+  It moves out to the boundary towards the grey axis, so whites and greys
+  stay exact.
+- Pixels with equal RGB channels skip the conversion. While the effect is
+  on every frame repaints the whole screen, and most of a desktop is grey.
+
+The paper is computed in the same shader while the effect is on, which
+saves the two overlay passes. It is laid out per monitor like the overlay,
+from the monitor rectangles as a uniform array (up to four).
+
+Pitfall: offscreen effects and partial redraws. On a partial redraw Clutter
+re-renders the offscreen copy, but Mutter culls everything outside the
+changed area (background and windows paint only their clip region), so the
+rest of the copy is black. Queueing a full redraw of `uiGroup` from a stage
+signal fixes the picture but can keep frames coming forever. What works is
+`Clutter.add_debug_flags(0, DrawDebugFlag.DISABLE_CLIPPED_REDRAWS, 0)` while
+the effect is on, as Blur my Shell does: frames that happen anyway get
+widened to the whole screen, a still screen stays still. With several
+monitors each one is painted separately into the shared copy, so the effect
+also forces `ACTOR_DIRTY` on every paint there.
+
+Pitfall: where the offscreen copy lies. The shader maps its texture
+coordinates back to the screen to line the paper up with the overlay.
+Clutter places the copy on the actor's paint volume, or on its allocation
+when there is none, and one child without a paint volume is enough for
+that. Real sessions often have such windows, a bare test desktop
+doesn't. `get_paint_box()` returns nothing then, so using it stretched the
+relief until only a soft gradient was left.
+
+Considered instead: giving windows a narrower colour state
+(`Clutter.Actor.set_color_state`) so Mutter's own colour transforms
+desaturate them for free. Mutter sets those per surface from the client's
+colour description and would overwrite them, and it would interfere with
+HDR and ICC profiles. Too fragile.
 
 ## More materials
 

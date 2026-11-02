@@ -27,6 +27,10 @@ Gio._promisify(GdkPixbuf.Pixbuf, 'new_from_stream_async');
 
 const TILES = ['detail', 'tone'];
 
+// The print effect spans all monitors and gets their geometry as a uniform
+// array of this length.
+const MAX_MONITORS = 4;
+
 // Schema maximum of the matte key.
 const MATTE_MAX = 0.5;
 
@@ -40,10 +44,13 @@ const MID_GREY = 0.46;
 
 const FIT_SAMPLES = Array.from({length: 65}, (_, i) => i / 64);
 
+const NO_CLIPPED_REDRAWS = Clutter.DrawDebugFlag.DISABLE_CLIPPED_REDRAWS;
+
 // Settings that only change values or visibility, not the textures.
 const SYNC_KEYS = [
     'texture-enabled', 'intensity', 'dark-balance',
     'matte-enabled', 'matte',
+    'print-colors-enabled', 'print-colors',
     'hide-in-fullscreen',
 ];
 
@@ -105,6 +112,85 @@ const OVER_SHADER = `${OVERLAY_RELIEF}${PAPER_OVER}
 cogl_color_out = over;
 `;
 
+// Print colours need the finished pixels, so the UI is rendered offscreen
+// first. The paper is then applied in the same pass instead of the overlay.
+const PRINT_UNIFORMS = `${UNIFORMS}
+uniform float u_print;
+uniform vec2 u_origin;
+uniform vec2 u_extent;
+uniform vec4 u_monitors[${MAX_MONITORS}];
+uniform float u_tile_size;
+uniform sampler2D u_screen;
+uniform sampler2D u_detail;
+uniform sampler2D u_tone;
+uniform sampler2D u_gamut;
+uniform vec2 u_gamut_size;
+`;
+const PRINT_SHADER = `
+vec2 st = cogl_tex_coord0_in.st;
+vec4 color = texture2D(u_screen, st) * cogl_color_in;
+vec3 c = color.a > 0.0 ? color.rgb / color.a : color.rgb;
+
+// The paper is laid out per monitor like the overlay, from each monitor's
+// top left corner.
+vec2 pos = u_origin + st * u_extent;
+vec2 paper_uv = pos / u_tile_size;
+for (int i = 0; i < ${MAX_MONITORS}; i++) {
+    vec4 m = u_monitors[i];
+    if (pos.x >= m.x && pos.y >= m.y && pos.x < m.x + m.z && pos.y < m.y + m.w)
+        paper_uv = (pos - m.xy) / u_tile_size;
+}
+
+// Print can't reach the colourfulness of emitted light, least of all in
+// blue, violet and green. Colours outside the gamut of offset print on
+// uncoated paper (u_gamut, see tools/printgamut.py) move in OKLab towards
+// the grey of their hue's most colourful print colour, with a soft knee so
+// gradients stay smooth. Greys and colours print can reach stay untouched,
+// greys skip the conversion.
+if (u_print > 0.0 && max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)) > 1.0 / 1024.0) {
+    vec3 lin = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+    vec3 lms = pow(lin * mat3(
+        0.4122214708, 0.5363325363, 0.0514459929,
+        0.2119034982, 0.6806995451, 0.1073969566,
+        0.0883024619, 0.2817188376, 0.6299787005), vec3(1.0 / 3.0));
+    vec3 lab = lms * mat3(
+        0.2104542553, 0.7936177850, -0.0040720468,
+        1.9779984951, -2.4285922050, 0.4505937099,
+        0.0259040371, 0.7827717662, -0.8086757660);
+    float chroma = length(lab.yz);
+    float column = (fract(atan(lab.z, lab.y) / 6.2831853) * (u_gamut_size.x - 1.0) + 0.5) /
+        u_gamut_size.x;
+    float cusp = texture2D(u_gamut, vec2(column, 0.0)).g;
+    vec2 p = vec2(lab.x - cusp, chroma);
+    float angle = atan(p.y, p.x) / 3.14159265;
+    float limit = texture2D(u_gamut,
+        vec2(column, (angle * (u_gamut_size.y - 1.0) + 0.5) / u_gamut_size.y)).r;
+    float x = length(p) / max(limit, 1e-4);
+    // Towards the grey axis the knee moves out to the boundary, so light
+    // greys close to white stay put.
+    float knee = 1.0 - 0.2 * chroma / length(p);
+    if (x > knee) {
+        float y = (x - knee) / max(1.0 - knee, 1e-4);
+        float squeezed = knee + (1.0 - knee) * y / sqrt(1.0 + y * y);
+        p *= mix(1.0, squeezed / x, u_print);
+        lab = vec3(cusp + p.x, lab.yz * (p.y / chroma));
+        lms = lab * mat3(
+            1.0, 0.3963377774, 0.2158037573,
+            1.0, -0.1055613458, -0.0638541728,
+            1.0, -0.0894841775, -1.2914855480);
+        lin = clamp((lms * lms * lms) * mat3(
+            4.0767416621, -3.3077115913, 0.2309699292,
+            -1.2684380046, 2.6097574011, -0.3413193965,
+            -0.0041960863, -0.7034186147, 1.7076147010), 0.0, 1.0);
+        c = mix(12.92 * lin, 1.055 * pow(lin, vec3(1.0 / 2.4)) - 0.055,
+            step(0.0031308, lin));
+    }
+}
+${reliefGlsl('paper_uv', 'u_detail', 'u_tone')}${PAPER_MULTIPLY}${PAPER_OVER}
+c = c * multiply * (1.0 - over.a) + over.rgb;
+cogl_color_out = vec4(c * color.a, color.a);
+`;
+
 /**
  * How far the matte look lifts black, in screen values. Paper adds the
  * light it reflects from its darkest ink in linear light, which lifts
@@ -146,12 +232,101 @@ function matteLevel(lift) {
 
 /**
  * @param {Cogl.Pipeline} pipeline
- * @param {object} values - uniform names without the u_ prefix
+ * @param {object} values - uniform names without the u_ prefix; numbers,
+ *   vectors as arrays, uniform arrays as arrays of those arrays
  */
 function setUniforms(pipeline, values) {
-    for (const [name, value] of Object.entries(values))
-        pipeline.set_uniform_1f(pipeline.get_uniform_location(`u_${name}`), value);
+    for (const [name, value] of Object.entries(values)) {
+        const location = pipeline.get_uniform_location(`u_${name}`);
+        if (Array.isArray(value?.[0]))
+            pipeline.set_uniform_float(location, value[0].length, value.length, value.flat());
+        else if (Array.isArray(value))
+            pipeline.set_uniform_float(location, value.length, 1, value);
+        else
+            pipeline.set_uniform_1f(location, value);
+    }
 }
+
+/**
+ * Print colours and paper in one pass over an offscreen copy of the UI.
+ * Only attached while print colours are on, since rendering offscreen costs
+ * an extra full-screen pass on every change. The overlay is hidden then.
+ */
+const PaperPrintEffect = GObject.registerClass(
+class PaperPrintEffect extends Shell.GLSLEffect {
+    constructor(textures) {
+        super();
+        this._textures = textures;
+        this._values = {};
+        this._pipeline = null;
+    }
+
+    vfunc_build_pipeline() {
+        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, PRINT_UNIFORMS, PRINT_SHADER, true);
+    }
+
+    setValues(values) {
+        this._values = values;
+        this.queue_repaint();
+    }
+
+    vfunc_paint(node, paintContext, flags) {
+        // Each monitor is painted separately and only fills its own part of
+        // the offscreen copy, so with several monitors it can't be reused.
+        if (Main.layoutManager.monitors.length > 1)
+            flags |= Clutter.EffectPaintFlags.ACTOR_DIRTY;
+        super.vfunc_paint(node, paintContext, flags);
+    }
+
+    vfunc_paint_target(node, paintContext) {
+        // Layer 0 is the offscreen copy, the paper textures and the gamut
+        // table go next to it.
+        const pipeline = this.get_pipeline();
+        if (pipeline !== this._pipeline) {
+            const {detail, tone, gamut} = this._textures;
+            [detail, tone, gamut].forEach((texture, i) => {
+                pipeline.set_layer_texture(i + 1, texture);
+                pipeline.set_layer_wrap_mode(i + 1, texture === gamut
+                    ? Cogl.PipelineWrapMode.CLAMP_TO_EDGE : Cogl.PipelineWrapMode.REPEAT);
+            });
+            ['u_screen', 'u_detail', 'u_tone', 'u_gamut'].forEach((name, layer) =>
+                pipeline.set_uniform_1i(pipeline.get_uniform_location(name), layer));
+            this._pipeline = pipeline;
+        }
+        // Texture coordinates span the offscreen buffer. Clutter sizes it
+        // from the actor's paint volume, or its allocation when one of the
+        // children has no paint volume (common with real windows), in local
+        // coordinates: right/bottom edge rounded up past 0.75 px of padding,
+        // the size rounded plus 3 px, the rest goes to the left/top
+        // (_clutter_actor_box_enlarge_for_effects). uiGroup sits at the
+        // stage origin, so this maps straight back to stage coordinates and
+        // the paper lines up with the overlay.
+        const actor = this.get_actor();
+        const volume = actor.get_paint_volume();
+        let x1, y1, x2, y2;
+        if (volume) {
+            const origin = volume.get_origin();
+            [x1, y1] = [origin.x, origin.y];
+            [x2, y2] = [x1 + volume.get_width(), y1 + volume.get_height()];
+        } else {
+            ({x1, y1, x2, y2} = actor.get_allocation_box());
+        }
+        const width = Math.round(x2 - x1);
+        const height = Math.round(y2 - y1);
+        x2 = Math.ceil(x2 + 0.75);
+        y2 = Math.ceil(y2 + 0.75);
+        x1 = x2 - width - 3;
+        y1 = y2 - height - 3;
+        setUniforms(pipeline, {
+            ...this._values,
+            tone_ratio: this._textures.toneRatio,
+            gamut_size: this._textures.gamutSize,
+            origin: [x1, y1],
+            extent: [x2 - x1, y2 - y1],
+        });
+        super.vfunc_paint_target(node, paintContext);
+    }
+});
 
 /**
  * Decode a PNG off the compositor thread and upload it once to the GPU.
@@ -353,6 +528,8 @@ class PaperOverlay {
         this._surfaces = [];
         this._textures = null;
         this._cancellable = null;
+        this._print = null;
+        this._clippedRedrawsDisabled = false;
         // Values shown while a slider is dragged, before they are saved.
         this._previews = new Map();
 
@@ -391,12 +568,17 @@ class PaperOverlay {
             pruneCache(this._cacheDir).catch(e =>
                 console.error(`Paper my Shell: cannot clean up the texture cache: ${e.message}`));
         }
-        const [detail, tone] = await Promise.all(files.map(file => loadTexture(file, cancellable)));
+        const [detail, tone, gamut] = await Promise.all([
+            ...files.map(file => loadTexture(file, cancellable)),
+            loadTexture(this._extension.dir.get_child('print-gamut.png'), cancellable),
+        ]);
         return {
             detail,
             tone,
+            gamut,
             detailSize: detail.get_width(),
             toneRatio: detail.get_width() / (tone.get_width() * TONE_SCALE),
+            gamutSize: [gamut.get_width(), gamut.get_height()],
         };
     }
 
@@ -433,6 +615,7 @@ class PaperOverlay {
 
     _rebuild() {
         this._destroySurfaces();
+        this._removePrint();
 
         if (!this._settings.get_boolean('enabled'))
             return;
@@ -492,16 +675,55 @@ class PaperOverlay {
             lift,
             brightness: matteLevel(lift),
         };
+        const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;
 
         // A covered fullscreen window can't be scanned out directly.
         const monitors = Main.layoutManager.monitors;
         const hideInFullscreen = s.get_boolean('hide-in-fullscreen');
         const fullscreen = index => hideInFullscreen && monitors[index]?.inFullscreen;
 
+        // The print effect spans all monitors, so any fullscreen window
+        // turns it off and the overlay takes over again.
+        const printActive = print > 0 && !monitors.some(m => fullscreen(m.index));
+        if (printActive) {
+            if (!this._print) {
+                this._print = new PaperPrintEffect(this._textures);
+                Main.layoutManager.uiGroup.add_effect_with_name('paper-my-shell-print', this._print);
+                // A partial redraw would leave everything outside the
+                // changed area empty in the offscreen copy, so frames have
+                // to repaint the whole screen while the effect is on. This
+                // only widens frames that happen anyway, a still screen
+                // stays still.
+                const [, drawFlags] = Clutter.get_debug_flags();
+                this._clippedRedrawsDisabled = !(drawFlags & NO_CLIPPED_REDRAWS);
+                if (this._clippedRedrawsDisabled)
+                    Clutter.add_debug_flags(0, NO_CLIPPED_REDRAWS, 0);
+            }
+            const slots = Array.from({length: MAX_MONITORS}, (_, i) => monitors[i]);
+            this._print.setValues({
+                ...values,
+                print,
+                monitors: slots.map(m => m ? [m.x, m.y, m.width, m.height] : [0, 0, 0, 0]),
+                tile_size: this._textures.detailSize,
+            });
+        } else {
+            this._removePrint();
+        }
+
         for (const {surface, monitorIndex} of this._surfaces) {
             surface.setValues(values);
-            surface.visible = !fullscreen(monitorIndex);
+            surface.visible = !printActive && !fullscreen(monitorIndex);
         }
+    }
+
+    _removePrint() {
+        if (!this._print)
+            return;
+        // Leave the flag alone if someone else had set it.
+        if (this._clippedRedrawsDisabled)
+            Clutter.remove_debug_flags(0, NO_CLIPPED_REDRAWS, 0);
+        Main.layoutManager.uiGroup.remove_effect(this._print);
+        this._print = null;
     }
 
     _destroySurfaces() {
@@ -516,6 +738,7 @@ class PaperOverlay {
         Main.layoutManager.disconnectObject(this);
         global.display.disconnectObject(this);
         this._destroySurfaces();
+        this._removePrint();
         this._textures = null;
     }
 }

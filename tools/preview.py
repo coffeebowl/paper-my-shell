@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Mirrors the shaders in extension.js: a multiply for shadows and paper
-light, then an OVER for highlights and flare.
+Mirrors the shaders in extension.js: print colours, then a multiply for
+shadows and paper light, then an OVER for highlights and flare.
 """
 
 import argparse
@@ -10,6 +10,10 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+
+from printgamut import oklab_to_srgb, srgb_to_oklab
+
+GAMUT = Path(__file__).resolve().parent.parent / "extension" / "print-gamut.png"
 
 # As in papergen.js and extension.js.
 TONE_SCALE = 8
@@ -81,9 +85,46 @@ def matte_level(lift):
     return MID_GREY / (lift + (1 - lift) * MID_GREY)
 
 
-def composite(base, texdir, intensity, balance=0.4, matte=0.0):
+def sample(table, x, y):
+    """Bilinear lookup at texel coordinates, clamped like the GPU does."""
+    x = np.clip(x, 0, table.shape[1] - 1)
+    y = np.clip(y, 0, table.shape[0] - 1)
+    x0 = np.minimum(x.astype(int), table.shape[1] - 2)
+    y0 = np.minimum(y.astype(int), table.shape[0] - 2)
+    fx, fy = (x - x0)[..., None], (y - y0)[..., None]
+    top = table[y0, x0] * (1 - fx) + table[y0, x0 + 1] * fx
+    bottom = table[y0 + 1, x0] * (1 - fx) + table[y0 + 1, x0 + 1] * fx
+    return top * (1 - fy) + bottom * fy
+
+
+def print_colours(b, gamut, strength):
+    """Move colours print can't reach into its gamut, as PRINT_SHADER."""
+    table = np.asarray(Image.open(gamut).convert("RGB"), np.float32) / 255
+    lab = srgb_to_oklab(b)
+    chroma = np.hypot(lab[..., 1], lab[..., 2])
+    hue = np.arctan2(lab[..., 2], lab[..., 1]) / (2 * np.pi) % 1
+    column = hue * (table.shape[1] - 1)
+    cusp = sample(table, column, np.zeros_like(column))[..., 1]
+    p = np.stack([lab[..., 0] - cusp, chroma], -1)
+    r = np.maximum(np.hypot(*np.moveaxis(p, -1, 0)), 1e-6)
+    angle = np.arctan2(p[..., 1], p[..., 0])
+    limit = sample(table, column, angle / np.pi * (table.shape[0] - 1))[..., 0]
+    x = r / np.maximum(limit, 1e-4)
+    knee = 1 - 0.2 * chroma / r
+    y = (x - knee) / np.maximum(1 - knee, 1e-4)
+    squeezed = np.where(x > knee, knee + (1 - knee) * y / np.sqrt(1 + y * y), x)
+    p = p * (1 + strength * (squeezed / np.maximum(x, 1e-6) - 1))[..., None]
+    hue_dir = lab[..., 1:] / np.maximum(chroma, 1e-6)[..., None]
+    lab = np.concatenate([(cusp + p[..., 0])[..., None], hue_dir * p[..., 1:]], -1)
+    return np.clip(oklab_to_srgb(lab), 0, 1)
+
+
+def composite(base, texdir, intensity, balance=0.4, matte=0.0, print_colors=0.0):
     b = np.asarray(base.convert("RGB"), np.float32) / 255
     h, w = b.shape[:2]
+
+    if print_colors > 0:
+        b = print_colours(b, GAMUT, print_colors)
     ds, dl = relief(texdir / "detail.png", w, h)
     ts, tl = relief(texdir / "tone.png", w, h, TONE_SCALE)
     shadow = 1 - (1 - ds) * (1 - ts)
@@ -113,6 +154,7 @@ def main():
     ap.add_argument("-i", "--intensity", type=float, default=0.25)
     ap.add_argument("-d", "--dark-balance", type=float, default=0.4)
     ap.add_argument("-m", "--matte", type=float, default=0.0)
+    ap.add_argument("-p", "--print-colors", type=float, default=0.0)
     ap.add_argument("--size", default="1600x1000")
     args = ap.parse_args()
 
@@ -121,7 +163,7 @@ def main():
     else:
         base = test_card(*map(int, args.size.split("x")))
     composite(base, args.texture, args.intensity, args.dark_balance,
-              args.matte).save(args.output)
+              args.matte, args.print_colors).save(args.output)
 
 
 if __name__ == "__main__":

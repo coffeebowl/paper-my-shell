@@ -24,6 +24,7 @@ Gio._promisify(Gio.File.prototype, 'delete_async');
 Gio._promisify(Gio.FileEnumerator.prototype, 'next_files_async');
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 Gio._promisify(GdkPixbuf.Pixbuf, 'new_from_stream_async');
+Gio._promisify(Gio.DBusConnection.prototype, 'call');
 
 const TILES = ['detail', 'tone', 'grain'];
 
@@ -31,8 +32,12 @@ const TILES = ['detail', 'tone', 'grain'];
 // tone tile again, stretched only by this factor.
 const MOTTLE_STRETCH = 2;
 
-// The print effect spans all monitors and gets their geometry as a uniform
-// array of this length.
+// Size of a texel in mm the textures are drawn for, a logical pixel at
+// about 110 dpi. With true size on, tiles scale to keep it on every monitor.
+const TEXEL_MM = 0.23;
+
+// The print effect spans all monitors and gets their geometry as uniform
+// arrays of this length.
 const MAX_MONITORS = 4;
 
 // Schema maximum of the matte key.
@@ -52,7 +57,7 @@ const NO_CLIPPED_REDRAWS = Clutter.DrawDebugFlag.DISABLE_CLIPPED_REDRAWS;
 
 // Settings that only change values or visibility, not the textures.
 const SYNC_KEYS = [
-    'texture-enabled', 'intensity', 'dark-balance', 'grain',
+    'texture-enabled', 'intensity', 'dark-balance', 'grain', 'true-size',
     'matte-enabled', 'matte', 'mottle',
     'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
@@ -144,7 +149,7 @@ uniform float u_print;
 uniform vec2 u_origin;
 uniform vec2 u_extent;
 uniform vec4 u_monitors[${MAX_MONITORS}];
-uniform float u_tile_size;
+uniform float u_tile_sizes[${MAX_MONITORS}];
 uniform sampler2D u_screen;
 uniform sampler2D u_detail;
 uniform sampler2D u_tone;
@@ -157,14 +162,14 @@ vec2 st = cogl_tex_coord0_in.st;
 vec4 color = texture2D(u_screen, st) * cogl_color_in;
 vec3 c = color.a > 0.0 ? color.rgb / color.a : color.rgb;
 
-// The paper is laid out per monitor like the overlay, from each monitor's
-// top left corner.
+// The paper is laid out per monitor like the overlay, each monitor with its
+// own tile size.
 vec2 pos = u_origin + st * u_extent;
-vec2 paper_uv = pos / u_tile_size;
+vec2 paper_uv = pos / u_tile_sizes[0];
 for (int i = 0; i < ${MAX_MONITORS}; i++) {
     vec4 m = u_monitors[i];
     if (pos.x >= m.x && pos.y >= m.y && pos.x < m.x + m.z && pos.y < m.y + m.w)
-        paper_uv = (pos - m.xy) / u_tile_size;
+        paper_uv = (pos - m.xy) / u_tile_sizes[i];
 }
 
 // Print can't reach the colourfulness of emitted light, least of all in
@@ -475,6 +480,37 @@ async function pruneCache(dir) {
 }
 
 /**
+ * Physical size of a logical pixel in mm per monitor index, for the
+ * monitors that report their size (EDID, via Mutter's DisplayConfig).
+ *
+ * @param {Gio.Cancellable} cancellable
+ * @returns {Promise<Map<number, number>>}
+ */
+async function pixelSizes(cancellable) {
+    const reply = await Gio.DBus.session.call(
+        'org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig',
+        'org.gnome.Mutter.DisplayConfig', 'GetResources',
+        null, null, Gio.DBusCallFlags.NONE, -1, cancellable);
+    const [, , outputs] = reply.deepUnpack();
+    const monitorManager = global.backend.get_monitor_manager();
+    const sizes = new Map();
+    for (const [, , , , connector, , , properties] of outputs) {
+        const index = monitorManager.get_monitor_for_connector(connector);
+        const monitor = Main.layoutManager.monitors[index];
+        const widthMm = properties['width-mm']?.unpack() ?? 0;
+        const heightMm = properties['height-mm']?.unpack() ?? 0;
+        if (!monitor || widthMm <= 0 || heightMm <= 0)
+            continue;
+        // Area based, so rotation doesn't matter.
+        const mm = Math.sqrt(widthMm * heightMm / (monitor.width * monitor.height));
+        // Some EDIDs only carry the aspect ratio or nothing sensible.
+        if (mm > 0.05 && mm < 1)
+            sizes.set(index, mm);
+    }
+    return sizes;
+}
+
+/**
  * Paints the paper over one monitor in two full-screen passes: a multiply
  * for shadows and paper light, and an OVER for highlights and flare. All
  * settings are shader uniforms, so changing them never rebuilds anything,
@@ -507,9 +543,12 @@ class PaperSurface extends Clutter.Actor {
 
     /**
      * @param {object} values - shader uniforms
+     * @param {number} tileSize - detail tile size on this monitor, in
+     *   logical pixels
      */
-    setValues(values) {
+    setValues(values, tileSize) {
         this._values = values;
+        this._tileSize = tileSize;
         setUniforms(this._multiply, values);
         setUniforms(this._over, values);
         this.queue_redraw();
@@ -557,6 +596,8 @@ class PaperOverlay {
         this._cancellable = null;
         this._print = null;
         this._clippedRedrawsDisabled = false;
+        this._pixelSizes = new Map();
+        this._sizesCancellable = null;
         // Values shown while a slider is dragged, before they are saved.
         this._previews = new Map();
 
@@ -570,12 +611,43 @@ class PaperOverlay {
                 this._sync();
             }, this);
         }
-        Main.layoutManager.connectObject(
-            'monitors-changed', () => this._rebuild(), this);
+        Main.layoutManager.connectObject('monitors-changed', () => {
+            this._loadPixelSizes();
+            this._rebuild();
+        }, this);
         global.display.connectObject(
             'in-fullscreen-changed', () => this._sync(), this);
 
+        this._loadPixelSizes();
         this._rebuild();
+    }
+
+    async _loadPixelSizes() {
+        this._sizesCancellable?.cancel();
+        const cancellable = this._sizesCancellable = new Gio.Cancellable();
+        try {
+            this._pixelSizes = await pixelSizes(cancellable);
+        } catch (e) {
+            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
+            console.error(`Paper my Shell: cannot read monitor sizes: ${e.message}`);
+            this._pixelSizes = new Map();
+        }
+        this._sizesCancellable = null;
+        this._sync();
+    }
+
+    /**
+     * Detail tile size on a monitor in logical pixels. With true size the
+     * texels keep their physical size, otherwise they are logical pixels.
+     *
+     * @param {number} index - monitor index
+     * @returns {number}
+     */
+    _tileSize(index) {
+        const size = this._textures.detailSize;
+        const mm = this._pixelSizes.get(index);
+        return this._settings.get_boolean('true-size') && mm ? size * TEXEL_MM / mm : size;
     }
 
     /**
@@ -737,14 +809,14 @@ class PaperOverlay {
                 ...values,
                 print,
                 monitors: slots.map(m => m ? [m.x, m.y, m.width, m.height] : [0, 0, 0, 0]),
-                tile_size: this._textures.detailSize,
+                tile_sizes: slots.map((m, i) => [this._tileSize(m ? i : 0)]),
             });
         } else {
             this._removePrint();
         }
 
         for (const {surface, monitorIndex} of this._surfaces) {
-            surface.setValues(values);
+            surface.setValues(values, this._tileSize(monitorIndex));
             surface.visible = !printActive && !fullscreen(monitorIndex);
         }
     }
@@ -767,6 +839,7 @@ class PaperOverlay {
 
     destroy() {
         this._cancellable?.cancel();
+        this._sizesCancellable?.cancel();
         this._settings.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         global.display.disconnectObject(this);

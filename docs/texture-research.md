@@ -69,7 +69,7 @@ The multiply also warms the white a little. There is no light falloff
 across the screen: it is still a monitor, and the illusion shouldn't fight
 that.
 
-## Grain and mottle
+## Grain, mottle, true size
 
 - **Grain.** The detail tile's rounded tooth, shaded on its own, reads as
   leather. A third tile (256², 1:1) with pixel-fine fibres and grain
@@ -80,6 +80,12 @@ that.
   tone tile again at a quarter of its size (stretched 2× instead of 8×),
   added to the OVER pass. `d + (1 − d) · a` only shows on dark areas,
   so light ones stay clean and it costs one texture lookup.
+- **True size.** Mutter's `DisplayConfig.GetResources` reports each
+  output's size in mm (from EDID). Tiles are scaled so a texel stays
+  0.23 mm, the logical pixel size the textures were made on (about
+  110 dpi). Most monitors run at a scale that keeps logical pixels near
+  that anyway, so the difference is usually small. The print pass gets
+  each monitor's tile size as a uniform array too.
 
 ## Print colours
 

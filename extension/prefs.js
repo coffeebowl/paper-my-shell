@@ -153,6 +153,8 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
                     _('Strength on dark areas, relative to light ones.')),
                 percentRow(settings, 'grain', 100, _('Fine grain'),
                     _('Pixel-fine fibres on top, relative to the intensity. Without it the texture looks more like leather.')),
+                switchRow(settings, 'true-size', _('True size'),
+                    _('Sizes the grain in millimetres from the size the monitor reports, so it looks the same on every screen.')),
             ]));
 
         page.add(featureGroup(settings, 'matte-enabled', _('Matte'),

@@ -19,6 +19,8 @@ the settings schema and are shown in the preferences.
   strong it is on dark surfaces is adjustable. A pixel-fine grain layer on
   top keeps the rounded tooth from looking like leather.
 - **Three papers**: recycled, drawing and watercolor.
+- **True size**: the grain keeps its size in millimetres on every monitor,
+  from the size the monitor reports.
 - **Matte**: the contrast of print instead of a screen. Even the darkest
   ink reflects some light, so blacks lift and turn to charcoal at the
   maximum, as on uncoated paper. Whites drop and get a touch warmer, so

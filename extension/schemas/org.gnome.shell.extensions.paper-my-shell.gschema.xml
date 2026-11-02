@@ -38,6 +38,11 @@
       <summary>Fine grain</summary>
       <description>Pixel-fine fibres and grain on top of the texture, relative to its intensity. Breaks up the rounded tooth, which on its own looks like leather.</description>
     </key>
+    <key name="true-size" type="b">
+      <default>true</default>
+      <summary>Size the texture in millimetres</summary>
+      <description>Uses the size the monitor reports, so paper grain is equally large on every screen. Monitors without a size keep one texel per logical pixel.</description>
+    </key>
 
     <key name="matte-enabled" type="b">
       <default>true</default>

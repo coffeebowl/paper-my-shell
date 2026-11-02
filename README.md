@@ -99,9 +99,23 @@ so while it is on every frame repaints the whole screen.
 - `tools/preview.py`: mirrors the shaders in numpy and composites a
   texture over a test card or a screenshot.
 - `tools/printgamut.py`: builds the print gamut table.
+- `tools/headless/`: runs the extension in an isolated headless GNOME
+  Shell.
 
 The Python tools need numpy, Pillow and SciPy; `make venv` sets them up in
 `.venv`.
+
+### Testing
+
+`tools/headless/run.sh` starts the extension in an isolated headless GNOME
+Shell (own settings and cache, real GPU) next to a helper extension that
+takes screenshots or measures frame costs:
+
+```sh
+tools/headless/run.sh check /tmp/out                     # screenshots
+BG='#c04040' tools/headless/run.sh check /tmp/out 1600x1000,1280x800 print-colors-enabled=true
+TIMEOUT=400 tools/headless/run.sh perf /tmp/out 3840x2160
+```
 
 ### Textures
 

@@ -18,7 +18,8 @@ the settings schema and are shown in the preferences.
   contrast. Shadows show on light surfaces, highlights on dark ones; how
   strong it is on dark surfaces is adjustable. A pixel-fine grain layer on
   top keeps the rounded tooth from looking like leather.
-- **Three papers**: recycled, drawing and watercolor.
+- **Seven papers**: recycled, drawing, watercolor, washi, laid paper,
+  cardboard and canvas.
 - **True size**: the grain keeps its size in millimetres on every monitor,
   from the size the monitor reports.
 - **Matte**: the contrast of print instead of a screen. Even the darkest
@@ -90,6 +91,9 @@ Each texture is four seamless tiles, uploaded once and tiled by the GPU
   strength.
 - ink (256²): fibre directions and where the paper takes ink, for ink
   spread.
+
+Laid paper and canvas are regular patterns with a period of whole pixels.
+Scaled by a fraction they would shimmer, so true size is off for them.
 
 Texture, matte and brightness are two full-screen passes per monitor
 (multiply, then OVER), each a single quad with a small shader. All settings

@@ -17,6 +17,10 @@
         <choice value="recycled"/>
         <choice value="drawing"/>
         <choice value="watercolor"/>
+        <choice value="washi"/>
+        <choice value="laid-paper"/>
+        <choice value="cardboard"/>
+        <choice value="canvas"/>
       </choices>
       <default>'recycled'</default>
       <summary>Texture</summary>

@@ -51,7 +51,51 @@ export const PRESETS = {
         bump: 1.3, cavity: 0.2, aniso: 1.0,
         grainFibers: 1.0, grainNoise: 0.7,
     },
+    // Japanese kozo paper: long visible bast fibres (7-15 mm) in a thin,
+    // cloudy, unsmoothed sheet with little tooth.
+    'washi': {
+        tooth: 0.2, toothSize: 1.2, coarse: 0.15, coarseSize: 6.0,
+        fibers: 1.6, fiberLength: 55, fiberArea: 2500, fine: 0.15,
+        formation: 0.55, bump: 1.3, cavity: 0.25, aniso: 1.0,
+        grainFibers: 1.2, grainNoise: 0.6,
+    },
+    // Laid writing paper: wire marks about 10 per cm, chain lines every
+    // 20-30 mm, on a smooth drawing-paper base.
+    'laid-paper': {
+        kind: 'laid', tooth: 0.35, toothSize: 1.2, coarse: 0.15,
+        coarseSize: 4.0, fibers: 0.25, fine: 0.2, formation: 0.25,
+        bump: 1.4, cavity: 0.25, aniso: 1.0,
+        laid: 0.9, laidPeriod: 4, chains: 9,
+        grainFibers: 0.5, grainNoise: 1.0,
+    },
+    // Grey board: pressed recycled fibre, short fibres, lumps and uneven
+    // pressing.
+    'cardboard': {
+        tooth: 0.6, toothSize: 1.6, coarse: 0.5, coarseSize: 7.0,
+        fibers: 0.5, fiberLength: 12, fiberArea: 300, lumps: 0.45,
+        fine: 0.35, formation: 0.45, bump: 1.5, cavity: 0.3, aniso: 1.0,
+        grainFibers: 0.8, grainNoise: 1.0,
+    },
+    // Coarse artist canvas: plain weave, about 11 threads per cm, uneven
+    // thread thickness, some fuzz.
+    'canvas': {
+        kind: 'canvas', threadPeriod: 4, fine: 0.15, formation: 0.2,
+        bump: 1.2, cavity: 0.4,
+        grainFibers: 0.3, grainNoise: 0.6,
+    },
 };
+
+/**
+ * Regular patterns (laid lines, weave) have a period of whole pixels.
+ * Scaled by a fraction they would shimmer (moire), so they stay at one
+ * texel per logical pixel.
+ *
+ * @param {string} name
+ * @returns {boolean}
+ */
+export function isPeriodic(name) {
+    return ['laid', 'canvas'].includes(PRESETS[name].kind);
+}
 
 /** xoshiro128**, seeded through splitmix32. */
 class Random {
@@ -363,6 +407,8 @@ class Field {
 function detail(n, preset, seed, scale) {
     const p = PRESETS[preset];
     const f = new Field(n, seed);
+    if (p.kind === 'canvas')
+        return canvas(f, p, scale);
     const angle = -25 * Math.PI / 180;
 
     // Height map: rounded tooth, coarser undulation, fibres, fine grain.
@@ -370,11 +416,73 @@ function detail(n, preset, seed, scale) {
     const big = f.pebbles(ts * 2.2, ts, p.aniso, angle);
     const small = f.pebbles(ts * 1.3, ts * 0.6, p.aniso, angle);
     const band = f.band(p.coarseSize * scale, p.aniso, angle);
-    const fibers = f.fibers(Math.trunc(n * n / 900), 40, scale);
+    const fibers = f.fibers(Math.trunc(n * n / (p.fiberArea ?? 900)), p.fiberLength ?? 40, scale);
     const fine = f.noise(0.5 * scale);
     const h = map(big, (v, i) => p.tooth * (v + 0.5 * small[i]) +
         p.coarse * band[i] + p.fibers * fibers[i] * 0.35 + p.fine * fine[i]);
+    if (p.lumps) {
+        const lumps = f.pebbles(25 * scale, 2.5 * scale);
+        h.forEach((v, i) => (h[i] = v + p.lumps * lumps[i]));
+    }
+    if (p.kind === 'laid') {
+        const laid = laidLines(f, p, scale);
+        h.forEach((v, i) => (h[i] = v + laid[i]));
+    }
     return shade(f, h, p.bump, p.cavity, scale);
+}
+
+/**
+ * Wire marks: fine laid lines across x, wider chain lines across y.
+ *
+ * The laid lines run vertically, across the text lines rather than along
+ * them. Both wobble a little like hand-strung wires.
+ */
+function laidLines(f, p, scale) {
+    const n = f.n;
+    const period = p.laidPeriod * scale;
+    // Columns shift slowly along y, by a fraction of a pixel.
+    const wobble = f.noise(40 * scale, 6, Math.PI / 2);
+    const strength = f.noise(20 * scale);
+    const spacing = n / p.chains;
+    const drift = f.noise(60 * scale, 6, 0);
+    return map(strength, (v, i) => {
+        const y = Math.floor(i / n);
+        const x = i % n;
+        const laid = Math.cos(2 * Math.PI * (x + 0.1 * period * wobble[y * n]) / period) *
+            (1 + 0.25 * v);
+        const d = mod(y + 1.5 * scale * drift[x], spacing) - spacing / 2;
+        const chain = -Math.exp(-((d / (1.2 * scale)) ** 2)) +
+            0.3 * Math.exp(-((d / (6 * scale)) ** 2));
+        return p.laid * (0.6 * laid + 1.4 * chain);
+    });
+}
+
+/** Plain weave: warp and weft go over and under each other in turn. */
+function canvas(f, p, scale) {
+    const n = f.n;
+    const period = p.threadPeriod * scale;
+    const threads = Math.trunc(n / period);
+    // Per thread thickness, plus slubs along each thread.
+    const warpSize = map(f.rng.normals(threads), v => 1 + 0.15 * v);
+    const weftSize = map(f.rng.normals(threads), v => 1 + 0.15 * v);
+    const warpSlub = f.noise(8 * scale, 5, Math.PI / 2);
+    const weftSlub = f.noise(8 * scale, 5, 0);
+    const fine = f.noise(0.5 * scale);
+    const h = map(fine, (v, k) => {
+        const x = k % n + 0.5;
+        const y = Math.floor(k / n) + 0.5;
+        const i = Math.floor(x / period);
+        const j = Math.floor(y / period);
+        const acrossX = (x % period) / period - 0.5;
+        const acrossY = (y % period) / period - 0.5;
+        const warp = warpSize[i] * (1 + 0.2 * warpSlub[k]) * Math.cos(Math.PI * acrossX) ** 0.7 *
+            (0.55 + 0.45 * Math.cos(Math.PI * (y / period - 0.5 - i)));
+        const weft = weftSize[j] * (1 + 0.2 * weftSlub[k]) * Math.cos(Math.PI * acrossY) ** 0.7 *
+            (0.55 - 0.45 * Math.cos(Math.PI * (x / period - 0.5 - j)));
+        return Math.max(warp, weft) + p.fine * v;
+    });
+    // Priming fills the finest gaps.
+    return shade(f, f.blur(h, 0.4 * scale), p.bump, p.cavity, scale);
 }
 
 /** Height map and fibre directions of the grain tile. */

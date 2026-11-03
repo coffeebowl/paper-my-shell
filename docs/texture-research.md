@@ -203,7 +203,21 @@ makes stochastic textures tileable.
 ### Procedural recipes
 
 - **Paper:** current generator. Possible upgrade: Worley + FBM for the tooth
-  (Grace Gilbert's watercolor stylization does this).
+  (Grace Gilbert's watercolor stylization does this). Checked against the
+  literature again: graphics models paper as a shaded pseudo-random height
+  field (Curtis et al. 1997), paper science as a random fibre network
+  whose flocs make the formation (Sampson). Both match what the generator
+  does. One difference: wood pulp fibres are 1–3 mm (4–13 px), the detail
+  tile's fibres reach 9 mm. They are weighted low, so they stay.
+- **Washi:** kozo fibres are 7–15 mm, about 10× longer than wood pulp, and
+  stay visible in a thin, unsmoothed, cloudy sheet. Preset with 55 px
+  fibres at high weight, little tooth, strong formation.
+- **Laid paper:** about 10 laid lines per cm (8–12, medieval 5–15) and
+  chain lines 20–30 mm apart (15–50). Laid lines every 4 px (0.92 mm),
+  9 chain lines per 1024 px tile (26 mm), both wobbling a little like
+  hand-strung wires. Laid lines run vertically, across the text lines.
+- **Cardboard (grey board):** pressed recycled fibre, matt and rough,
+  short fibres, lumps. Paper preset with short dense fibres and lumps.
 - **Wood:** concentric rings `sin(k·sqrt(x² + y²))` stretched strongly along
   one axis (e.g. 2.0 vs 0.4), domain-warped with FBM so the rings wobble,
   plus fine directional grain noise along the fibre direction. Mostly a
@@ -211,12 +225,25 @@ makes stochastic textures tileable.
 - **Fabric / canvas:** a weave pattern as height map: alternating over/under
   threads (`sin` on x and y, swapped every other cell), each thread with
   slight thickness and position jitter, plus fuzz noise. Linen: irregular
-  thread widths. Canvas: coarser, stronger relief.
+  thread widths. Canvas: coarser, stronger relief. Artist canvas has 16–24
+  threads per cm (#10 duck ~20 × 16, Belgian linen ~24 × 20). At 0.23 mm
+  per pixel that is about 2 px per thread, too fine to read as weave, so
+  the canvas preset uses 4 px (~11 per cm, a coarse canvas).
+- **Periodic patterns** need a period of whole pixels to tile and must not
+  be resampled by a fraction, or they shimmer. True size is off for them
+  (`isPeriodic()` in papergen.js).
 - **Leather:** Worley cells as pores and creases, low relief.
 
 ### Sources
 
+- [Curtis et al., Computer-Generated Watercolor](https://grail.cs.washington.edu/projects/watercolor/paper_small.pdf)
+- [Sampson, The Structural Characterisation of Fibre Networks in Papermaking](https://bioresources.cnr.ncsu.edu/wp-content/uploads/2020/03/2001.2.1205.pdf)
 - [MoXi: real-time ink dispersion in absorbent paper](https://www.researchgate.net/publication/220184655_MoXi_real-time_ink_dispersion_in_absorbent_paper)
+- [Chain and laid lines in medieval paper (Heritage Science)](https://www.nature.com/articles/s40494-023-01013-3)
+- [Etherington & Roberts: chain lines](https://cool.culturalheritage.org/don/dt/dt0650.html)
+- [Hand Papermaking: Washi](https://www.handpapermaking.org/post/washi)
+- [IFLA: paper conservation with washi](https://www.ifla.org/paper-conservation-by-using-japanese-paper-washi/)
+- [Cotton duck](https://en.wikipedia.org/wiki/Cotton_duck), [Talas linen canvas](https://www.talasonline.com/Linen-Canvas)
 
 - [Survey of Procedural Methods for Two-Dimensional Texture Generation](https://pmc.ncbi.nlm.nih.gov/articles/PMC7070409/)
 - [Real-Time Procedural Textures (finite-difference bump shading)](https://faculty.cc.gatech.edu/~turk/my_papers/real_time_textures.pdf)

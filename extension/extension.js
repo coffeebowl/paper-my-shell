@@ -13,7 +13,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {QuickMenuToggle, SystemIndicator} from 'resource:///org/gnome/shell/ui/quickSettings.js';
 import {Slider} from 'resource:///org/gnome/shell/ui/slider.js';
 
-import {TONE_SCALE} from './papergen.js';
+import {TONE_SCALE, isPeriodic} from './papergen.js';
 import {textureLabel, textureNames} from './textures.js';
 
 Gio._promisify(Gio.File.prototype, 'read_async');
@@ -704,6 +704,8 @@ class PaperOverlay {
     /**
      * Detail tile size on a monitor in logical pixels. With true size the
      * texels keep their physical size, otherwise they are logical pixels.
+     * Periodic textures always stay at one texel per pixel: scaled by a
+     * fraction their lines or weave would shimmer.
      *
      * @param {number} index - monitor index
      * @returns {number}
@@ -711,7 +713,8 @@ class PaperOverlay {
     _tileSize(index) {
         const size = this._textures.detailSize;
         const mm = this._pixelSizes.get(index);
-        return this._settings.get_boolean('true-size') && mm ? size * TEXEL_MM / mm : size;
+        const trueSize = this._settings.get_boolean('true-size') && !this._textures.periodic;
+        return trueSize && mm ? size * TEXEL_MM / mm : size;
     }
 
     /**
@@ -745,6 +748,7 @@ class PaperOverlay {
             toneRatio: detail.get_width() / (tone.get_width() * TONE_SCALE),
             grainRatio: detail.get_width() / grain.get_width(),
             gamutSize: [gamut.get_width(), gamut.get_height()],
+            periodic: isPeriodic(name),
         };
     }
 

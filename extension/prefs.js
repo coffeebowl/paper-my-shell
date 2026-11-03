@@ -4,6 +4,7 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
+import {isPeriodic} from './papergen.js';
 import {textureLabel, textureNames} from './textures.js';
 
 /**
@@ -144,7 +145,7 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
             if (textures[textureRow.selected])
                 settings.set_string('texture', textures[textureRow.selected]);
         });
-        page.add(featureGroup(settings, 'texture-enabled', _('Paper texture'),
+        const textureGroup = featureGroup(settings, 'texture-enabled', _('Paper texture'),
             _('A relief of paper grain and fibres over the whole screen.'), [
                 textureRow,
                 percentRow(settings, 'intensity', 100, _('Intensity'),
@@ -153,9 +154,24 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
                     _('Strength on dark areas, relative to light ones.')),
                 percentRow(settings, 'grain', 100, _('Fine grain'),
                     _('Pixel-fine fibres on top, relative to the intensity. Without it the texture looks more like leather.')),
-                switchRow(settings, 'true-size', _('True size'),
-                    _('Sizes the grain in millimetres from the size the monitor reports, so it looks the same on every screen.')),
-            ]));
+            ]);
+        // True size doesn't apply to periodic textures, so this row follows
+        // the selected texture as well as the feature switch.
+        const trueSizeText = _('Sizes the grain in millimetres from the size the monitor reports, so it looks the same on every screen.');
+        const trueSizeRow = switchRow(settings, 'true-size', _('True size'), trueSizeText);
+        textureGroup.add(trueSizeRow);
+        const syncTrueSize = () => {
+            const name = settings.get_string('texture');
+            const periodic = isPeriodic(name);
+            trueSizeRow.sensitive = settings.get_boolean('texture-enabled') && !periodic;
+            trueSizeRow.subtitle = periodic
+                ? `${_('Off for')} ${textureLabel(name)}: ${_('its regular pattern would shimmer when scaled, so it stays at one texel per pixel.')}`
+                : withDefault(trueSizeText, settings, 'true-size');
+        };
+        settings.connect('changed::texture', syncTrueSize);
+        settings.connect('changed::texture-enabled', syncTrueSize);
+        syncTrueSize();
+        page.add(textureGroup);
 
         page.add(featureGroup(settings, 'matte-enabled', _('Matte'),
             _('The contrast of print instead of a screen: blacks lift like ink on paper, whites get dimmer and slightly warmer. Overall brightness stays the same.'), [

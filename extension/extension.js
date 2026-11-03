@@ -70,7 +70,7 @@ const SYNC_KEYS = [
     'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
     'ink-spread-enabled', 'ink-spread',
-    'hide-in-fullscreen',
+    'hide-in-fullscreen', 'shift-texture',
 ];
 
 const UNIFORMS = `
@@ -160,6 +160,7 @@ uniform float u_ink;
 uniform vec2 u_origin;
 uniform vec2 u_extent;
 uniform vec2 u_pixel;
+uniform vec2 u_shift;
 uniform vec4 u_monitors[${MAX_MONITORS}];
 uniform float u_tile_sizes[${MAX_MONITORS}];
 uniform sampler2D u_screen;
@@ -200,6 +201,7 @@ for (int i = 0; i < ${MAX_MONITORS}; i++) {
         monitor = m;
     }
 }
+paper_uv += u_shift;
 
 // Ink soaks into the paper (u_ink_tile, see papergen.js ink()). Strokes
 // grow towards their darkest neighbour, but only where the paper takes ink,
@@ -544,6 +546,13 @@ async function pruneCache(dir) {
 }
 
 /**
+ * @returns {number[]} a random position as fractions of a period
+ */
+function randomShift() {
+    return [Math.random(), Math.random()];
+}
+
+/**
  * Physical size of a logical pixel in mm per monitor index, for the
  * monitors that report their size (EDID, via Mutter's DisplayConfig).
  *
@@ -590,6 +599,7 @@ class PaperSurface extends Clutter.Actor {
         this._over = this._createPipeline(ctx, textures, OVER_SHADER,
             'RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))');
         this._tileSize = textures.detailSize;
+        this._shift = [0, 0];
         this._values = {intensity: 0, balance: 0, lift: 0, mottle: 0, brightness: 1};
     }
 
@@ -609,10 +619,12 @@ class PaperSurface extends Clutter.Actor {
      * @param {object} values - shader uniforms
      * @param {number} tileSize - detail tile size on this monitor, in
      *   logical pixels
+     * @param {number[]} shift - where the texture starts, in tiles
      */
-    setValues(values, tileSize) {
+    setValues(values, tileSize, shift) {
         this._values = values;
         this._tileSize = tileSize;
+        this._shift = shift;
         setUniforms(this._multiply, values);
         setUniforms(this._over, values);
         this.queue_redraw();
@@ -636,7 +648,8 @@ class PaperSurface extends Clutter.Actor {
 
         for (const pipeline of passes) {
             const node = Clutter.PipelineNode.new(pipeline);
-            node.add_texture_rectangle(box, 0, 0, ...tiles);
+            const [x, y] = this._shift;
+            node.add_texture_rectangle(box, x, y, x + tiles[0], y + tiles[1]);
             root.add_child(node);
         }
     }
@@ -662,6 +675,8 @@ class PaperOverlay {
         this._clippedRedrawsDisabled = false;
         this._pixelSizes = new Map();
         this._sizesCancellable = null;
+        this._shift = randomShift();
+        this._locked = Main.sessionMode.isLocked;
         // Values shown while a slider is dragged, before they are saved.
         this._previews = new Map();
 
@@ -681,6 +696,17 @@ class PaperOverlay {
         }, this);
         global.display.connectObject(
             'in-fullscreen-changed', () => this._sync(), this);
+        // A static pattern on an OLED screen slowly wears into it. A new
+        // random position at every login and unlock spreads that wear out,
+        // and unlocking repaints the screen anyway.
+        Main.sessionMode.connectObject('updated', () => {
+            const locked = Main.sessionMode.isLocked;
+            if (this._locked && !locked) {
+                this._shift = randomShift();
+                this._sync();
+            }
+            this._locked = locked;
+        }, this);
 
         this._loadPixelSizes();
         this._rebuild();
@@ -699,6 +725,21 @@ class PaperOverlay {
         }
         this._sizesCancellable = null;
         this._sync();
+    }
+
+    /**
+     * Where the texture starts, in detail tiles: anywhere within a period
+     * of the tone tile, which repeats last, in whole texels so periodic
+     * textures stay on the pixel grid.
+     *
+     * @returns {number[]}
+     */
+    _shiftTiles() {
+        if (!this._settings.get_boolean('shift-texture'))
+            return [0, 0];
+        const {detailSize, toneRatio} = this._textures;
+        const period = detailSize / toneRatio;
+        return this._shift.map(f => Math.floor(f * period) / detailSize);
     }
 
     /**
@@ -879,6 +920,7 @@ class PaperOverlay {
                 ...values,
                 print,
                 ink,
+                shift: this._shiftTiles(),
                 monitors: slots.map(m => m ? [m.x, m.y, m.width, m.height] : [0, 0, 0, 0]),
                 tile_sizes: slots.map((m, i) => [this._tileSize(m ? i : 0)]),
             });
@@ -887,7 +929,7 @@ class PaperOverlay {
         }
 
         for (const {surface, monitorIndex} of this._surfaces) {
-            surface.setValues(values, this._tileSize(monitorIndex));
+            surface.setValues(values, this._tileSize(monitorIndex), this._shiftTiles());
             surface.visible = !printActive && !fullscreen(monitorIndex);
         }
     }
@@ -914,6 +956,7 @@ class PaperOverlay {
         this._settings.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         global.display.disconnectObject(this);
+        Main.sessionMode.disconnectObject(this);
         this._destroySurfaces();
         this._removePrint();
         this._textures = null;

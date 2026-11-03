@@ -40,6 +40,8 @@ glib-compile-schemas "$repo/extension/schemas"
     echo "color-shading-type='solid'"
     echo
     echo "[org/gnome/shell/extensions/paper-my-shell]"
+    # preview.py has no random texture position. Can be overridden.
+    echo "shift-texture=false"
     for kv in "$@"; do echo "$kv"; done
 } > "$tmp/config/glib-2.0/settings/keyfile"
 

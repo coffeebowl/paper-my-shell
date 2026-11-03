@@ -98,6 +98,12 @@
       <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Shares the offscreen rendering with print colours.</description>
     </key>
 
+    <key name="shift-texture" type="b">
+      <default>true</default>
+      <summary>Move the texture at login and unlock</summary>
+      <description>A new random position each time spreads the wear of the texture's light and dark spots on OLED screens. Not in the preferences; the headless tests turn it off to compare against preview.py.</description>
+    </key>
+
     <key name="hide-in-fullscreen" type="b">
       <default>true</default>
       <summary>Hide the overlay on monitors showing a fullscreen window</summary>

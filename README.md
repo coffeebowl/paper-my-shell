@@ -36,6 +36,8 @@ the settings schema and are shown in the preferences.
   feathers, like ink on absorbent paper.
 - **Stays out of the way**: monitors showing a fullscreen window hide the
   overlay, so games and videos keep direct scanout (can be turned off).
+  The texture starts at a random position at every login and unlock, so
+  on OLED screens its light and dark spots don't wear in one place.
 
 ## Requirements
 

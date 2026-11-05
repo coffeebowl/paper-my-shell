@@ -51,11 +51,11 @@ async function run() {
     await shot('desktop');
 
     const quickSettings = Main.panel.statusArea.quickSettings;
-    quickSettings.menu.open(false);
+    quickSettings.menu.open({animate: false});
     await wait(500);
     const toggle = quickSettings.menu._grid.get_children()
         .find(c => c.constructor.name.includes('PaperToggle'));
-    toggle?.menu.open(false);
+    toggle?.menu.open({animate: false});
     await wait(1000);
     await shot('menu');
 
@@ -72,7 +72,7 @@ async function run() {
     const after = settings.get_double('intensity');
     console.log(`PAPERTEST slider intensity before=${before} during=${during} after=${after}`);
     settings.reset('intensity');
-    quickSettings.menu.close(false);
+    quickSettings.menu.close({animate: false});
 
     extension.stateObj.openPreferences();
     await wait(5000);

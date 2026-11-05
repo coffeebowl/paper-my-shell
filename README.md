@@ -41,7 +41,7 @@ the settings schema and are shown in the preferences.
 
 ## Requirements
 
-GNOME Shell 50.
+GNOME Shell 51.
 
 ## Installation
 

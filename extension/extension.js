@@ -347,7 +347,7 @@ function setUniforms(pipeline, values) {
  * hidden then.
  */
 const PaperPrintEffect = GObject.registerClass(
-class PaperPrintEffect extends Shell.GLSLEffect {
+class PaperPrintEffect extends Clutter.ShaderEffect {
     constructor(textures) {
         super();
         this._textures = textures;
@@ -355,8 +355,12 @@ class PaperPrintEffect extends Shell.GLSLEffect {
         this._pipeline = null;
     }
 
-    vfunc_build_pipeline() {
-        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, PRINT_UNIFORMS, PRINT_SHADER, true);
+    // Called once for the class, Clutter adds the snippet to the offscreen
+    // pipeline.
+    vfunc_get_static_snippet() {
+        const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, PRINT_UNIFORMS, null);
+        snippet.set_replace(PRINT_SHADER);
+        return snippet;
     }
 
     setValues(values) {
@@ -374,7 +378,9 @@ class PaperPrintEffect extends Shell.GLSLEffect {
 
     vfunc_paint_target(node, paintContext) {
         // Layer 0 is the offscreen copy, the paper textures and the gamut
-        // table go next to it.
+        // table go next to it. Clutter makes a new pipeline whenever it
+        // recreates the offscreen buffer (new size or scale), so they are
+        // set again then.
         const pipeline = this.get_pipeline();
         if (pipeline !== this._pipeline) {
             const {detail, tone, grain, gamut, ink} = this._textures;

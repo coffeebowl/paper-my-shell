@@ -2,5 +2,5 @@
   "uuid": "check@local",
   "name": "Paper my Shell check",
   "description": "Headless test helper: screenshots of desktop, menu and preferences.",
-  "shell-version": ["50"]
+  "shell-version": ["51"]
 }

@@ -398,10 +398,9 @@ class PaperPrintEffect extends Clutter.ShaderEffect {
         // children has no paint volume (common with real windows), in local
         // coordinates: right/bottom edge rounded up past 0.75 px of padding,
         // the size rounded plus 3 px, the rest goes to the left/top
-        // (_clutter_actor_box_enlarge_for_effects), then scaled by the
-        // rounded up resource scale. uiGroup sits at the stage origin, so
-        // this maps straight back to stage coordinates and the paper lines
-        // up with the overlay.
+        // (_clutter_actor_box_enlarge_for_effects). uiGroup sits at the
+        // stage origin, so this maps straight back to stage coordinates and
+        // the paper lines up with the overlay.
         const actor = this.get_actor();
         const volume = actor.get_paint_volume();
         let x1, y1, x2, y2;
@@ -418,7 +417,7 @@ class PaperPrintEffect extends Clutter.ShaderEffect {
         y2 = Math.ceil(y2 + 0.75);
         x1 = x2 - width - 3;
         y1 = y2 - height - 3;
-        const scale = Math.ceil(actor.get_resource_scale());
+        const [, textureWidth, textureHeight] = this.get_target_size();
         setUniforms(pipeline, {
             ...this._values,
             tone_ratio: this._textures.toneRatio,
@@ -426,7 +425,7 @@ class PaperPrintEffect extends Clutter.ShaderEffect {
             gamut_size: this._textures.gamutSize,
             origin: [x1, y1],
             extent: [x2 - x1, y2 - y1],
-            pixel: [1 / Math.ceil((x2 - x1) * scale), 1 / Math.ceil((y2 - y1) * scale)],
+            pixel: [1 / textureWidth, 1 / textureHeight],
         });
         super.vfunc_paint_target(node, paintContext);
     }

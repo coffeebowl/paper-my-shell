@@ -45,7 +45,15 @@ GNOME Shell 51.
 
 ## Installation
 
-From source:
+From a release: download `paper-my-shell@coffeebowl.shell-extension.zip`
+from the [latest release](https://github.com/coffeebowl/paper-my-shell/releases/latest)
+and install it:
+
+```sh
+gnome-extensions install --force paper-my-shell@coffeebowl.shell-extension.zip
+```
+
+Or from source:
 
 ```sh
 git clone https://github.com/coffeebowl/paper-my-shell.git

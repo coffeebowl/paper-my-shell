@@ -6,5 +6,5 @@
   "shell-version": ["51"],
   "session-modes": ["user", "unlock-dialog"],
   "settings-schema": "org.gnome.shell.extensions.paper-my-shell",
-  "version-name": "0.1"
+  "version-name": "51.0"
 }

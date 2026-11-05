@@ -3,7 +3,7 @@
 
 Mirrors the shaders in extension.js: ink spread and print colours, then a
 multiply for shadows and paper light, then an OVER for highlights, ink
-mottle and flare.
+mottle and flare (in one blend on the GPU).
 """
 
 import argparse
@@ -24,6 +24,7 @@ MOTTLE_STRETCH = 2
 INK_SHARE = 0.3
 INK_STRENGTH = 0.6
 INK_FEATHER = 0.6
+TINT_MIN_MATTE = 1 / (255 * 0.12)
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
          "processing cellulose fibres derived from wood, rags, grasses or other "
@@ -173,11 +174,14 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
     flare = matte_lift(matte)
     brightness = brightness * matte_level(flare)
 
-    # Multiply pass: paper light and shadows.
-    paper = brightness * np.array([1, 1 - 0.04 * matte, 1 - 0.12 * matte])
+    # Multiply: paper light and shadows. The overlay leaves out a tint too
+    # faint to see, the print effect always has it.
+    paper = brightness * np.ones(3)
+    if matte >= TINT_MIN_MATTE or print_colors > 0 or ink > 0:
+        paper *= np.array([1, 1 - 0.04 * matte, 1 - 0.12 * matte])
     b = b * paper * (1 - intensity * shadow)[..., None]
 
-    # OVER pass: highlights over ink mottle over the light paper reflects
+    # OVER: highlights over ink mottle over the light paper reflects
     # from black.
     hl = (intensity * balance * light)[..., None]
     color = np.array([1, 0.97, 0.92]) * flare

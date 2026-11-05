@@ -105,9 +105,11 @@ Each texture is four seamless tiles, uploaded once and tiled by the GPU
 Laid paper and canvas are regular patterns with a period of whole pixels.
 Scaled by a fraction they would shimmer, so true size is off for them.
 
-Texture, matte and brightness are two full-screen passes per monitor
-(multiply, then OVER), each a single quad with a small shader. All settings
-are uniforms, so changing them never rebuilds anything.
+Texture, matte and brightness are one full-screen pass per monitor, a
+single quad with a small shader whose blend does the multiply and the OVER
+at once. A stronger matte look tints white per colour channel, which one
+blend can't do, so it splits into two passes (multiply, then OVER). All
+settings are uniforms, so changing them never rebuilds anything.
 
 Print colours and ink spread need the finished pixels, so the UI is
 rendered offscreen and one shader does them and the paper in a single pass

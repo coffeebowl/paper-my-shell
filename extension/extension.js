@@ -111,13 +111,22 @@ float light = 1.0 - (1.0 - detail.r) * (1.0 - tone.r) * (1.0 - grain.r);
 `;
 }
 
-// Multiplied with the screen: shadows of the relief and the slightly warmer
-// white of paper under room light. Brightness is a plain dimming factor on
-// top.
-const PAPER_MULTIPLY = `
-vec3 multiply = u_brightness *
-    vec3(1.0, 1.0 - 0.04 * u_matte, 1.0 - 0.12 * u_matte) *
-    (1.0 - u_intensity * shadow);
+// The slightly warmer white of paper under room light, with the matte look.
+const PAPER_TINT = `
+vec3 tint = vec3(1.0, 1.0 - 0.04 * u_matte, 1.0 - 0.12 * u_matte);
+`;
+
+// Below this matte the tint changes white by less than one level (blue moves
+// most), so the overlay leaves it out and draws one pass instead of two.
+const TINT_MIN_MATTE = 1 / (255 * 0.12);
+
+// Multiplied with the screen: shadows of the relief, then the tint.
+// Brightness is a plain dimming factor on top.
+const PAPER_SHADE = `
+float shade = u_brightness * (1.0 - u_intensity * shadow);
+`;
+const PAPER_MULTIPLY = `${PAPER_TINT}${PAPER_SHADE}
+vec3 multiply = shade * tint;
 `;
 
 /**
@@ -144,6 +153,13 @@ over.rgb *= u_brightness;
 
 const OVERLAY_RELIEF = reliefGlsl('cogl_tex_coord0_in.st',
     'cogl_sampler0', 'cogl_sampler1', 'cogl_sampler2');
+// Shade and OVER in one blend, dst * shade * (1 - over.a) + over.rgb: the
+// colour is over.rgb, the alpha 1 - shade * (1 - over.a). The tint is a
+// factor per channel and can't go into the alpha. A pass of its own costs
+// more than splitting the blend, so a visible tint takes the two passes.
+const ONE_PASS_SHADER = `${OVERLAY_RELIEF}${PAPER_SHADE}${paperOverGlsl('cogl_sampler1')}
+cogl_color_out = vec4(over.rgb, 1.0 - shade * (1.0 - over.a));
+`;
 const MULTIPLY_SHADER = `${OVERLAY_RELIEF}${PAPER_MULTIPLY}
 cogl_color_out = vec4(multiply, 1.0);
 `;
@@ -589,23 +605,25 @@ async function pixelSizes(cancellable) {
 }
 
 /**
- * Paints the paper over one monitor in two full-screen passes: a multiply
- * for shadows and paper light, and an OVER for highlights and flare. All
- * settings are shader uniforms, so changing them never rebuilds anything,
- * and nothing animates, so the surface never causes a redraw by itself.
+ * Paints the paper over one monitor: shadows and paper light multiplied,
+ * highlights and flare composited OVER, in one full-screen pass, or in two
+ * when the tint of the matte look is visible. All settings are shader
+ * uniforms, so changing them never rebuilds anything, and nothing animates,
+ * so the surface never causes a redraw by itself.
  */
 const PaperSurface = GObject.registerClass(
 class PaperSurface extends Clutter.Actor {
     constructor(textures, params) {
         super(params);
         const ctx = global.stage.context.get_backend().get_cogl_context();
+        const over = 'RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))';
+        this._onePass = this._createPipeline(ctx, textures, ONE_PASS_SHADER, over);
         this._multiply = this._createPipeline(ctx, textures, MULTIPLY_SHADER,
             'RGBA = ADD(SRC_COLOR * (DST_COLOR), 0)');
-        this._over = this._createPipeline(ctx, textures, OVER_SHADER,
-            'RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))');
+        this._over = this._createPipeline(ctx, textures, OVER_SHADER, over);
         this._tileSize = textures.detailSize;
         this._shift = [0, 0];
-        this._values = {intensity: 0, balance: 0, lift: 0, mottle: 0, brightness: 1};
+        this._values = {intensity: 0, balance: 0, matte: 0, lift: 0, mottle: 0, brightness: 1};
     }
 
     _createPipeline(ctx, textures, shader, blend) {
@@ -630,8 +648,8 @@ class PaperSurface extends Clutter.Actor {
         this._values = values;
         this._tileSize = tileSize;
         this._shift = shift;
-        setUniforms(this._multiply, values);
-        setUniforms(this._over, values);
+        for (const pipeline of [this._onePass, this._multiply, this._over])
+            setUniforms(pipeline, values);
         this.queue_redraw();
     }
 
@@ -640,16 +658,18 @@ class PaperSurface extends Clutter.Actor {
     }
 
     vfunc_paint_node(root, _paintContext) {
-        const {intensity, balance, lift, mottle, brightness} = this._values;
+        const {intensity, balance, matte, lift, mottle, brightness} = this._values;
         const [width, height] = this.get_size();
         const tiles = [width / this._tileSize, height / this._tileSize];
         const box = new Clutter.ActorBox({x1: 0, y1: 0, x2: width, y2: height});
 
-        const passes = [];
-        if (intensity > 0 || brightness < 1)
-            passes.push(this._multiply);
-        if (intensity * balance > 0 || lift > 0 || mottle > 0)
-            passes.push(this._over);
+        const multiply = intensity > 0 || brightness < 1;
+        const over = intensity * balance > 0 || lift > 0 || mottle > 0;
+        let passes = [];
+        if (matte >= TINT_MIN_MATTE)
+            passes = [multiply && this._multiply, over && this._over].filter(Boolean);
+        else if (multiply || over)
+            passes = [this._onePass];
 
         for (const pipeline of passes) {
             const node = Clutter.PipelineNode.new(pipeline);

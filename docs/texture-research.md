@@ -25,10 +25,13 @@ directional noise for fibres, then bump/normal shading.
 
 ## Overlay encoding
 
-The extension draws two passes with custom Cogl pipelines:
+The extension blends two parts with a custom Cogl pipeline:
 
 - multiply: `dst · (1 − shadow)`, shows on light surfaces
 - OVER with white: `dst + (1 − dst) · highlight`, shows on dark surfaces
+
+Both fit into one blend, `src + dst · (1 − src.a)`, with the highlight as
+colour and `1 − (1 − shadow) · (1 − highlight)` as alpha.
 
 A signed shading value `m` is stored as black (`m < 0`) or white (`m > 0`)
 with `alpha = |m|` in a grey + alpha PNG. Raking light makes shadows much

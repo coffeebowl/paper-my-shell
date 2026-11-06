@@ -2,6 +2,7 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Mtk from 'gi://Mtk';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -89,6 +90,76 @@ function animateFull() {
     };
 }
 
+/** A large window-sized area changing every frame, not the whole screen. */
+function animateLarge() {
+    const box = new Clutter.Actor({x: 300, y: 200, width: 1400, height: 900});
+    Main.layoutManager.uiGroup.add_child(box);
+    const timeline = new Clutter.Timeline({actor: box, duration: 1000, repeat_count: -1});
+    timeline.connect('new-frame', (_t, ms) => {
+        const v = Math.floor(100 + 100 * Math.abs(Math.sin(ms / 160)));
+        box.background_color = new Cogl.Color({red: v, green: 120, blue: 255 - v, alpha: 255});
+    });
+    timeline.start();
+    return () => {
+        timeline.stop();
+        box.destroy();
+    };
+}
+
+// PAPER_EMULATE_AGE=n: the headless shell hands the effect only this
+// frame's damage. A real monitor with buffer age n also brings back the
+// damage of the n - 1 frames before, and Mutter rounds it to framebuffer
+// pixels and back at fractional scales. This feeds the effect such a clip.
+const EMULATE_AGE = Number(GLib.getenv('PAPER_EMULATE_AGE') ?? 0);
+const ringStats = {maxClip: 0, maxRing: 0, maxPending: 0, ringUs: 0, capped: 0};
+
+function emulateBufferAge(effect) {
+    const proto = Object.getPrototypeOf(effect);
+    if (proto.__emulated)
+        return;
+    proto.__emulated = true;
+    // Mutter rounds each frame's damage out to framebuffer pixels and the
+    // union with older frames' back out to the stage. Rounding back goes
+    // pixel by pixel, but for float rounding on pixel boundaries, so that
+    // clip is the union of the frames' own clips.
+    const history = [];
+    let lastIn = null, lastOut = null;
+    const emulate = clip => {
+        const united = clip.copy();
+        for (const old of history.slice(-(EMULATE_AGE - 1)))
+            united.union(old);
+        history.push(clip.copy());
+        if (history.length > 8)
+            history.shift();
+        return united;
+    };
+    const fbRegion = proto._framebufferRegion, queueRing = proto._queueRing,
+        queuePending = proto._queuePending;
+    if (EMULATE_AGE > 1) {
+        proto._framebufferRegion = function (clip, layout, copy) {
+            if (clip !== lastIn) {
+                lastIn = clip;
+                lastOut = emulate(clip);
+            }
+            return fbRegion.call(this, lastOut, layout, copy);
+        };
+    }
+    proto._queueRing = function (copy, clip, layout) {
+        const t0 = GLib.get_monotonic_time();
+        const r = queueRing.call(this, copy, clip, layout);
+        ringStats.ringUs += GLib.get_monotonic_time() - t0;
+        ringStats.maxClip = Math.max(ringStats.maxClip, clip.num_rectangles());
+        ringStats.maxRing = Math.max(ringStats.maxRing, copy.rings[copy.rings.length - 1].mask.num_rectangles());
+        if (r === null)
+            ringStats.capped++;
+        return r;
+    };
+    proto._queuePending = function () {
+        ringStats.maxPending = Math.max(ringStats.maxPending, this._pendingRedraws.length);
+        return queuePending.call(this);
+    };
+}
+
 async function measure(label, animate) {
     let frames = 0;
     const id = global.stage.connect('after-paint', () => frames++);
@@ -104,7 +175,10 @@ async function measure(label, animate) {
     console.log(`PERF ${label}: fps ${(frames / secs).toFixed(1)} | ` +
         `CPU ms/frame ${perFrame((c1 - c0) * 10)} | ` +
         `GPU µs/frame ${perFrame((g1 - g0) / 1000)} | ` +
-        `GPU ms/s ${((g1 - g0) / 1e6 / secs).toFixed(1)}`);
+        `GPU ms/s ${((g1 - g0) / 1e6 / secs).toFixed(1)} | ` +
+        `rings: max clip ${ringStats.maxClip} ring ${ringStats.maxRing} pending ${ringStats.maxPending} rects, ` +
+        `${perFrame(ringStats.ringUs / 1000)} ms/frame, capped ${ringStats.capped}×`);
+    Object.assign(ringStats, {maxClip: 0, maxRing: 0, maxPending: 0, ringUs: 0, capped: 0});
 }
 
 // Every config sets every switch: they carry over from the one before.
@@ -158,7 +232,11 @@ async function run() {
             for (const [key, value] of Object.entries(config))
                 settings.set_boolean(key, value);
             await wait(1000);
-            const scenarios = [['idle', animateNothing], ['small', animateSmall], ['full', animateFull]];
+            const effect = Main.layoutManager.uiGroup.get_effect('paper-my-shell-print');
+            if (effect)
+                emulateBufferAge(effect);
+            const scenarios = [['idle', animateNothing], ['small', animateSmall], ['large', animateLarge],
+                ['full', animateFull]];
             for (const [scenario, animate] of scenarios) {
                 if (!ONLY || ONLY.includes(`${name}:${scenario}`))
                     await measure(`${name} ${scenario}`, animate);

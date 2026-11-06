@@ -170,6 +170,11 @@ the monitor shows (`partial.png`) and the same after a full repaint
 (`full.png`). The two have to be equal. Screenshots can't show this, they
 render a fresh offscreen copy.
 
+The headless shell hands the effect only each frame's damage. A real
+monitor reuses older buffers and brings back the damage of the frames
+before (buffer age); `PAPER_EMULATE_AGE=3` makes `perf` feed the effect
+such clips, rounded like Mutter does at fractional scales.
+
 ### Textures
 
 A texture is a preset in `papergen.js` and a choice of the `texture` key

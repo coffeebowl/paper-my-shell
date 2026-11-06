@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Mirrors the shaders in extension.js: ink spread, print colours and the
-matte look, then a multiply for shadows and the tint, then an OVER for
-highlights and ink mottle (in one blend on the GPU).
+Mirrors the shaders in extension.js: ink spread, print colours, light
+scattering and the matte look, then a multiply for shadows and the tint,
+then an OVER for highlights and ink mottle (in one blend on the GPU).
 """
 
 import argparse
@@ -25,6 +25,8 @@ INK_SHARE = 0.7
 INK_STRENGTH = 0.9
 INK_FEATHER = 0.9
 INK_REACH = 0.5
+SCATTER_MAX_MM = 0.25
+TEXEL_MM = 0.23
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
          "processing cellulose fibres derived from wood, rags, grasses or other "
@@ -173,14 +175,44 @@ def ink_spread(b, soak, amount):
     return np.minimum(b, spread)
 
 
+def scatter_strength(kp, pixel):
+    """Mix of the neighbours' mean for scattering length kp on pixels of
+    size `pixel` (both mm), as scatterStrength()."""
+    if kp <= 0:
+        return 0.0
+    scale = kp / pixel / (2 * np.pi)
+    steps, end, angles = 80, 16, 8
+    t = (np.arange(steps) + 0.5) * end / steps
+    angle = (np.arange(angles) + 0.5) * np.pi / 2 / angles
+    r = scale * t[:, None]
+    ring = (np.maximum(0, 1 - r * np.cos(angle)) * np.maximum(0, 1 - r * np.sin(angle))).mean(1)
+    stay = (t * np.exp(-t) * ring).sum() * end / steps
+    return min(1.0, 2 * (1 - stay))
+
+
+def light_scatter(b, raw, strength):
+    """Light scattering as PRINT_SHADER: T * blur(T) with T = c^1.1, the
+    blur from the unprocessed image `raw` as a difference."""
+    h, w = b.shape[:2]
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    r = INK_REACH
+    around = np.mean([sample(raw, x + dx, y + dy) ** 1.1
+                      for dx, dy in ((r, 0), (-r, 0), (0, r), (0, -r))], axis=0)
+    t = np.maximum(b, 0) ** 1.1
+    blurred = np.maximum(t + strength * (around - raw ** 1.1), 0)
+    return (t * blurred) ** (1 / 2.2)
+
+
 def tiled(path, w, h):
     t = np.asarray(Image.open(path).convert("RGB"), np.float32) / 255
     return np.tile(t, (h // t.shape[0] + 1, w // t.shape[1] + 1, 1))[:h, :w]
 
 
 def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
-              print_colors=0.0, grain=0.0, mottle=0.0, ink=0.0):
+              print_colors=0.0, grain=0.0, mottle=0.0, ink=0.0, scatter=0.0,
+              pixel_mm=TEXEL_MM):
     b = np.asarray(base.convert("RGB"), np.float32) / 255
+    raw = b
     h, w = b.shape[:2]
     gs, gl = relief(texdir / "grain.png", w, h)
 
@@ -188,6 +220,8 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
         b = ink_spread(b, tiled(texdir / "ink.png", w, h), ink)
     if print_colors > 0:
         b = print_lut(b, LUT, print_colors)
+    if scatter > 0:
+        b = light_scatter(b, raw, scatter_strength(scatter * SCATTER_MAX_MM, pixel_mm))
     black, tint = matte_values(matte)
     if matte > 0:
         b = matte_curve(b, black)
@@ -221,6 +255,8 @@ def main():
     ap.add_argument("-g", "--grain", type=float, default=0.0)
     ap.add_argument("--mottle", type=float, default=0.0)
     ap.add_argument("--ink", type=float, default=0.0)
+    ap.add_argument("--scatter", type=float, default=0.0)
+    ap.add_argument("--pixel-mm", type=float, default=TEXEL_MM)
     ap.add_argument("--size", default="1600x1000")
     args = ap.parse_args()
 
@@ -230,7 +266,7 @@ def main():
         base = test_card(*map(int, args.size.split("x")))
     composite(base, args.texture, args.intensity, args.dark_balance,
               args.matte, args.brightness, args.print_colors, args.grain,
-              args.mottle, args.ink).save(args.output)
+              args.mottle, args.ink, args.scatter, args.pixel_mm).save(args.output)
 
 
 if __name__ == "__main__":

@@ -35,6 +35,10 @@ the settings schema and are shown in the preferences.
 - **Ink spread** (experimental): dark strokes grow a little where the
   paper takes ink, with ragged edges, and creep along fibres in short
   feathers, like ink on absorbent paper.
+- **Light scattering** (experimental): light that enters the paper next to
+  ink scatters under it, so dark strokes get a faint soft halo and light
+  gaps between them get a little darker. Sized in millimetres from the
+  scattering length of uncoated paper.
 - **Stays out of the way**: monitors showing a fullscreen window hide the
   overlay, so games and videos keep direct scanout (can be turned off).
   The texture starts at a random position at every login and unlock, so
@@ -111,16 +115,18 @@ single quad with a small shader whose blend does the multiply and the OVER
 at once. All settings are uniforms, so changing them never rebuilds
 anything.
 
-The matte look, print colours and ink spread need the finished pixels, so the UI is
-rendered offscreen and one shader does them and the paper in a single pass
-instead of the overlay. Each monitor keeps its offscreen copy between
-frames, and a frame only repaints the part of it that changed, so a small
-change costs about as much as without the extension. Ink spread reads
-neighbouring pixels, so it repaints a pixel wide ring around each change
-one frame later; at fractional scales, where Mutter's rounding to device
-pixels can't be followed exactly, it also repaints the changed area once
-more when the screen has been still for a moment. Monitors showing a fullscreen window (with "hide in
-fullscreen") or HDR are left out and keep the overlay where it applies.
+The matte look, print colours, ink spread and light scattering need the
+finished pixels, so the UI is rendered offscreen and one shader does them
+and the paper in a single pass instead of the overlay. Each monitor keeps
+its offscreen copy between frames, and a frame only repaints the part of
+it that changed, so a small change costs about as much as without the
+extension. Ink spread and light scattering read neighbouring pixels, so
+they repaint a pixel wide ring around each change one frame later; at
+fractional scales, where Mutter's rounding to device pixels can't be
+followed exactly, they also repaint the changed area once more when the
+screen has been still for a moment. Monitors showing a fullscreen window
+(with "hide in fullscreen") or HDR are left out and keep the overlay where
+it applies.
 
 ## Development
 

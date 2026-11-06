@@ -51,12 +51,17 @@ const INK_FEATHER = 0.9;
 // Distance of the ink neighbours and length of a feather step, in physical
 // pixels. Half a pixel, read with linear filtering, lets strokes grow by
 // less than a pixel and softens the ragged edges. It also halves the pull
-// of a neighbour, which the strengths above make up for.
+// of a neighbour, which the strengths above make up for. Light scattering
+// reads the same four neighbours.
 const INK_REACH = 0.5;
 
-// How far the ink of a pixel reaches its neighbours, in whole physical
-// pixels. A change repaints this much around it one frame later.
+// How far ink and scattered light of a pixel reach its neighbours, in whole
+// physical pixels. A change repaints this much around it one frame later.
 const INK_RING = Math.ceil(2 * INK_REACH);
+
+// Scattering length kp of light in uncoated paper at the full amount of
+// light scattering, in mm (Arney: about 0.1 to 0.25 mm).
+const SCATTER_MAX_MM = 0.25;
 
 // Mutter keeps the damage of this many frames for buffer age, so a redraw
 // clip can contain areas painted that long ago.
@@ -80,6 +85,7 @@ const PAPER_BLACK = [0.05, 0.05 * 0.97 ** 2.2, 0.05 * 0.92 ** 2.2];
 const SYNC_KEYS = [
     'texture-enabled', 'intensity', 'dark-balance', 'grain', 'true-size',
     'mottle-enabled', 'mottle', 'paper-black-enabled', 'paper-black',
+    'light-scatter-enabled', 'light-scatter',
     'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
     'ink-spread-enabled', 'ink-spread',
@@ -161,6 +167,7 @@ cogl_color_out = vec4(over.rgb, 1.0 - shade * (1.0 - over.a));
 const PRINT_UNIFORMS = `${UNIFORMS}
 uniform float u_print;
 uniform float u_ink;
+uniform float u_scatter;
 uniform vec3 u_paper_black;
 uniform vec3 u_tint;
 uniform vec2 u_origin;
@@ -214,6 +221,19 @@ vec3 c = color.a > 0.0 ? color.rgb / color.a : color.rgb;
 vec2 pos = u_origin + st * u_extent;
 vec2 paper_uv = (pos - u_monitor.xy) / u_tile_size + u_shift;
 
+// The four neighbours half a pixel away, each the mean of two pixels. Ink
+// spread and light scattering read them.
+vec2 lo = (u_monitor.xy - u_origin) / u_extent + 0.5 * u_texel;
+vec2 hi = (u_monitor.xy + u_monitor.zw - u_origin) / u_extent - 0.5 * u_texel;
+vec3 raw = c;
+vec3 right, left, down, up;
+if (u_ink > 0.0 || u_scatter > 0.0) {
+    right = ${neighbourGlsl('vec2(u_reach.x, 0.0)')};
+    left = ${neighbourGlsl('vec2(-u_reach.x, 0.0)')};
+    down = ${neighbourGlsl('vec2(0.0, u_reach.y)')};
+    up = ${neighbourGlsl('vec2(0.0, -u_reach.y)')};
+}
+
 // Ink soaks into the paper (u_ink_tile, see papergen.js ink()). Strokes
 // grow towards their darkest neighbour, but only where the paper takes ink,
 // on its fibres and raised grain: a hard threshold, so edges turn ragged
@@ -233,11 +253,7 @@ if (u_ink > 0.0) {
         step(threshold, texture2D(u_ink_tile, ink_uv + vec2(quarter.x, -quarter.y)).b) +
         step(threshold, texture2D(u_ink_tile, ink_uv + vec2(-quarter.x, quarter.y)).b));
     float strength = sqrt(u_ink);
-    vec2 lo = (u_monitor.xy - u_origin) / u_extent + 0.5 * u_texel;
-    vec2 hi = (u_monitor.xy + u_monitor.zw - u_origin) / u_extent - 0.5 * u_texel;
-    vec3 near = min(
-        min(${neighbourGlsl('vec2(u_reach.x, 0.0)')}, ${neighbourGlsl('vec2(-u_reach.x, 0.0)')}),
-        min(${neighbourGlsl('vec2(0.0, u_reach.y)')}, ${neighbourGlsl('vec2(0.0, -u_reach.y)')}));
+    vec3 near = min(min(right, left), min(down, up));
     vec3 spread = c + (near - c) * take * ${INK_STRENGTH.toFixed(2)} * strength;
     vec2 along = soak.rg * 2.0 - 1.0;
     if (length(along) >= 0.5) {
@@ -264,6 +280,22 @@ if (u_ink > 0.0) {
 if (u_print > 0.0 && max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)) > 1.0 / 1024.0)
     c = mix(c, print_lut(c), u_print);
 
+// Light scattering (optical dot gain): light enters the paper through the
+// ink, scatters sideways and leaves through the ink where it comes out.
+// With T the ink's transmittance, a flat area reflects T * T, so
+// T = sqrt(linear) = c^1.1; at edges it is T * blur(T). Dark strokes get a
+// soft halo, light gaps between them get darker. u_scatter mixes in the
+// mean of the four neighbours, from the physical scattering length and the
+// pixel size (scatterStrength()). The blur is taken from the unprocessed
+// copy, as a difference, so flat areas stay exactly as they are.
+if (u_scatter > 0.0) {
+    vec3 e = vec3(1.1);
+    vec3 around = 0.25 * (pow(right, e) + pow(left, e) + pow(down, e) + pow(up, e));
+    vec3 t = pow(max(c, 0.0), e);
+    vec3 blurred = max(t + u_scatter * (around - pow(raw, e)), 0.0);
+    c = pow(t * blurred, vec3(1.0 / 2.2));
+}
+
 // Matte: even the darkest ink reflects some light, which adds up in linear
 // light. Shadows lift, midtones barely, white not at all.
 if (u_paper_black.r > 0.0)
@@ -286,6 +318,41 @@ function matteValues(matte) {
         paper_black: PAPER_BLACK.map(b => (matte * b ** (1 / 2.2)) ** 2.2),
         tint: [1, 1 - 0.015 * matte, 1 - 0.045 * matte],
     };
+}
+
+/**
+ * How much of the four neighbours' mean light scattering mixes in. Paper
+ * scatters light by Arney's point spread function (2π/kp²)·exp(−2πr/kp).
+ * Light enters evenly over a pixel and is seen evenly over pixels, so the
+ * share that stays in its pixel is that function against the pixel's
+ * autocorrelation (1 − |x|)(1 − |y|). The rest goes to the neighbours: a
+ * mix of s gives them s / 2, diagonals and further pixels included, which
+ * hold only a few percent of it at the sizes that fit. It can't give them
+ * more than half, so on very fine pixels the halo stops growing.
+ *
+ * @param {number} kp - scattering length in mm
+ * @param {number} pixel - size of a physical pixel in mm
+ * @returns {number} 0..1
+ */
+function scatterStrength(kp, pixel) {
+    if (kp <= 0)
+        return 0;
+    // The distance from entry to exit has the density t·exp(−t) in units
+    // of kp / 2π. Integrated over t and a quarter of the directions.
+    const scale = kp / pixel / (2 * Math.PI);
+    const steps = 80, end = 16, angles = 8;
+    let stay = 0;
+    for (let i = 0; i < steps; i++) {
+        const t = (i + 0.5) * end / steps;
+        const r = scale * t;
+        let ring = 0;
+        for (let j = 0; j < angles; j++) {
+            const angle = (j + 0.5) * Math.PI / 2 / angles;
+            ring += Math.max(0, 1 - r * Math.cos(angle)) * Math.max(0, 1 - r * Math.sin(angle));
+        }
+        stay += t * Math.exp(-t) * ring / angles * end / steps;
+    }
+    return Math.min(1, 2 * (1 - stay));
 }
 
 /**
@@ -560,9 +627,10 @@ function roundingWidths(scale, ratio) {
 }
 
 /**
- * Ink spread, print colours, matte and paper in one pass over an offscreen
- * copy of the UI, drawn back per monitor. Only attached while one of the
- * first three is on. The overlay is hidden then on the monitors it covers.
+ * Ink spread, print colours, light scattering, matte and paper in one pass
+ * over an offscreen copy of the UI, drawn back per monitor. Only attached
+ * while one of the first four is on. The overlay is hidden then on the
+ * monitors it covers.
  *
  * Each monitor view keeps its copy between frames, and a frame only paints
  * its redraw clip into it, so partial redraws keep working: the window group
@@ -571,9 +639,10 @@ function roundingWidths(scale, ratio) {
  * unchanged in the copy. The copy has the resolution of the view's
  * framebuffer, so fractional scaling doesn't resample it.
  *
- * Ink spread reads neighbours, so pixels just outside a changed area change
- * as well. Mutter offers no way to widen the redraw clip of the frame from
- * an extension, so that ring is repainted one frame later.
+ * Ink spread and light scattering read neighbours, so pixels just outside a
+ * changed area change as well. Mutter offers no way to widen the redraw
+ * clip of the frame from an extension, so that ring is repainted one frame
+ * later.
  */
 const PaperPrintEffect = GObject.registerClass(
 class PaperPrintEffect extends Clutter.Effect {
@@ -582,6 +651,8 @@ class PaperPrintEffect extends Clutter.Effect {
         this._textures = textures;
         this._values = {};
         this._tileSizes = [];
+        this._pixelSizes = [];
+        this._scatter = new Map();
         this._skipped = new Set();
         this._template = null;
         this._plain = null;
@@ -594,13 +665,18 @@ class PaperPrintEffect extends Clutter.Effect {
     }
 
     /**
-     * @param {object} values - shader uniforms
+     * @param {object} values - shader uniforms, with scatter as the
+     *   scattering length in mm
      * @param {number[]} tileSizes - detail tile size per monitor index
+     * @param {number[]} pixelSizes - logical pixel size in mm per monitor
+     *   index
      * @param {Set<number>} skipped - monitor indices to leave untouched
      */
-    setValues(values, tileSizes, skipped) {
+    setValues(values, tileSizes, pixelSizes, skipped) {
         this._values = values;
         this._tileSizes = tileSizes;
+        this._pixelSizes = pixelSizes;
+        this._scatter.clear();
         this._skipped = skipped;
         // The output changes everywhere.
         this.get_actor()?.queue_redraw();
@@ -756,7 +832,7 @@ class PaperPrintEffect extends Clutter.Effect {
         copy.painted = true;
         if (fresh && clip)
             this._fullRedraw = true;
-        if (this._values.ink > 0) {
+        if (this._values.ink > 0 || this._values.scatter > 0) {
             // Every frame leaves a ring, if only an empty one, so the next
             // frame knows which one was last.
             let changed = null;
@@ -828,8 +904,14 @@ class PaperPrintEffect extends Clutter.Effect {
      */
     _quad(pipeline, monitor, area, width, height) {
         const bounds = [monitor.x, monitor.y, monitor.width, monitor.height];
+        // Physical pixels of the copy: logical ones divided by the scale.
+        const pixel = (this._pixelSizes[monitor.index] ?? TEXEL_MM) * area[2] / width;
+        const key = `${monitor.index}:${pixel}`;
+        if (!this._scatter.has(key))
+            this._scatter.set(key, scatterStrength(this._values.scatter, pixel));
         setUniforms(pipeline, {
             ...this._values,
+            scatter: this._scatter.get(key),
             tone_ratio: this._textures.toneRatio,
             grain_ratio: this._textures.grainRatio,
             lut_size: this._textures.lutSize,
@@ -1556,6 +1638,8 @@ class PaperOverlay {
         const matte = s.get_boolean('paper-black-enabled') ? this._double('paper-black') : 0;
         const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;
         const ink = s.get_boolean('ink-spread-enabled') ? this._double('ink-spread') : 0;
+        const scatter = s.get_boolean('light-scatter-enabled')
+            ? this._double('light-scatter') * SCATTER_MAX_MM : 0;
 
         // A covered fullscreen window can't be scanned out directly.
         const monitors = Main.layoutManager.monitors;
@@ -1570,15 +1654,18 @@ class PaperOverlay {
             .map(lm => lm.get_number()));
         const skipped = new Set(monitors
             .filter(m => fullscreen(m.index) || hdr.has(m.index)).map(m => m.index));
-        const printActive = (matte > 0 || print > 0 || ink > 0) &&
+        const printActive = (matte > 0 || print > 0 || ink > 0 || scatter > 0) &&
             monitors.some(m => !skipped.has(m.index));
         if (printActive) {
             if (!this._print) {
                 this._print = new PaperPrintEffect(this._textures);
                 Main.layoutManager.uiGroup.add_effect_with_name('paper-my-shell-print', this._print);
             }
-            this._print.setValues({...values, ...matteValues(matte), print, ink, shift: this._shiftTiles()},
-                monitors.map(m => this._tileSize(m.index)), skipped);
+            this._print.setValues(
+                {...values, ...matteValues(matte), print, ink, scatter, shift: this._shiftTiles()},
+                monitors.map(m => this._tileSize(m.index)),
+                monitors.map(m => this._pixelSizes.get(m.index) ?? TEXEL_MM),
+                skipped);
         } else {
             this._removePrint();
         }

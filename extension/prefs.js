@@ -201,6 +201,10 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
             _('Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper.'), [
                 percentRow(settings, 'ink-spread', 100, _('Amount'), ''),
             ]));
+        print.add(featureGroup(settings, 'light-scatter-enabled', _('Light scattering (experimental)'),
+            _('Light that enters the paper next to ink scatters under it: dark strokes get a faint soft halo, light text on dark surfaces gets a little thinner. 100 % is the most absorbent uncoated paper, sized in millimetres for each monitor.'), [
+                percentRow(settings, 'light-scatter', 100, _('Amount'), ''),
+            ]));
         window.add(print);
     }
 }

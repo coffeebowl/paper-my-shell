@@ -68,7 +68,7 @@ brightness setting is there for a dimmer screen. Matte warms the white a
 little. There is no light falloff across the screen: it is still a
 monitor, and the illusion shouldn't fight that.
 
-## Grain, mottle, ink spread, true size
+## Grain, mottle, ink spread, light scattering, true size
 
 - **Grain.** The detail tile's rounded tooth, shaded on its own, reads as
   leather. A third tile (256², 1:1) with pixel-fine fibres and grain
@@ -118,6 +118,38 @@ monitor, and the illusion shouldn't fight that.
     from one monitor to the next.
   - Cost: the four neighbours, one ink lookup and up to four along the
     fibre, little next to the offscreen pass itself.
+- **Light scattering** (optical dot gain). On uncoated paper the largest
+  effect of ink at screen scale is not the ink moving but the light:
+  light enters the paper next to a stroke, scatters sideways under it and
+  is absorbed, so strokes look darker and softer than the ink is. The
+  usual model (Arney, Yule–Nielsen): with T the transmittance of the ink
+  layer, light passes it twice, R = T · (PSF ∗ T). A flat area reflects
+  T², so T = √R in linear light, c^1.1 in screen values; only edges
+  change. Arney's point spread function for paper is
+  (2π/kp²)·exp(−2πr/kp), with kp about 0.1–0.25 mm on uncoated paper.
+  - Integrated over the area of a pixel (light enters evenly over one
+    pixel, the eye sees each pixel evenly), at 0.23 mm per pixel 17 % to
+    38 % of the light leaves its pixel, almost all of it to the four
+    direct neighbours, nearly nothing beyond one pixel. So the four
+    half-pixel neighbours ink spread reads already make the kernel: their
+    mean is the pixel with weight ½ and each neighbour ⅛, mixed in by
+    twice the share that leaves. Diagonals and further pixels (a few
+    percent of that share) go to the direct neighbours instead.
+  - The share is computed per monitor from the physical pixel size
+    (logical size from EDID divided by the scale), so the halo has the
+    same size in mm everywhere. The kernel can pass on at most half the
+    light, which kp 0.25 mm reaches at about 0.155 mm per pixel; on finer
+    pixels the halo stops growing. A wider kernel would need more reads
+    and a two-pixel ring, for a difference too fine to see there.
+  - The blur is taken as a difference from the unprocessed copy, so flat
+    areas stay exact even when print colours or ink spread changed the
+    pixel itself. Their changes to the neighbours aren't scattered.
+  - Light text on dark surfaces gets a little thinner and dimmer:
+    physically right (the gaps between ink lose light), and the reason it
+    is a setting of its own.
+  - It is a different effect from the matte look: that lifts flat blacks
+    (light reflected before it reaches the ink), scattering leaves flat
+    areas alone. One can't stand in for the other.
 - **True size.** Mutter's `DisplayConfig.GetResources` reports each
   output's size in mm (from EDID). Tiles are scaled so a texel stays
   0.23 mm, the logical pixel size the textures were made on (about
@@ -192,7 +224,8 @@ painting only the redraw clip into it:
   copy takes the pixels whose centre lies in that clip, which includes
   every pixel the screen gets and only pixels the background really
   repaints.
-- Ink spread reads neighbours, so pixels just outside a change change too.
+- Ink spread and light scattering read neighbours, so pixels just outside
+  a change change too.
   Mutter has no way for an extension to widen the redraw clip of the
   current frame (its redraw clip filters are private), so the ring is
   queued for the next frame. The ring itself is damage then, and buffer
@@ -297,6 +330,7 @@ makes stochastic textures tileable.
 
 - [Curtis et al., Computer-Generated Watercolor](https://grail.cs.washington.edu/projects/watercolor/paper_small.pdf)
 - [Sampson, The Structural Characterisation of Fibre Networks in Papermaking](https://bioresources.cnr.ncsu.edu/wp-content/uploads/2020/03/2001.2.1205.pdf)
+- Arney & Pray, J. Imaging Sci. Technol. 43(4); Arney & Arney, J. Imaging Sci. Technol. 40(3): the paper point spread function and kp
 - [MoXi: real-time ink dispersion in absorbent paper](https://www.researchgate.net/publication/220184655_MoXi_real-time_ink_dispersion_in_absorbent_paper)
 - [Chain and laid lines in medieval paper (Heritage Science)](https://www.nature.com/articles/s40494-023-01013-3)
 - [Etherington & Roberts: chain lines](https://cool.culturalheritage.org/don/dt/dt0650.html)

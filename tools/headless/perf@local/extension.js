@@ -108,7 +108,8 @@ async function measure(label, animate) {
 }
 
 // Every config sets every switch: they carry over from the one before.
-const FEATURES = ['paper-black-enabled', 'print-colors-enabled', 'ink-spread-enabled'];
+const FEATURES = ['paper-black-enabled', 'print-colors-enabled', 'ink-spread-enabled',
+    'light-scatter-enabled'];
 const config = (...on) => ({enabled: true, ...Object.fromEntries(FEATURES.map(k => [k, on.includes(k)]))});
 const CONFIGS = [
     ['off', {'enabled': false}],
@@ -117,6 +118,8 @@ const CONFIGS = [
     ['overlay+print', config('print-colors-enabled')],
     ['overlay+ink', config('ink-spread-enabled')],
     ['overlay+print+ink', config('print-colors-enabled', 'ink-spread-enabled')],
+    ['overlay+scatter', config('light-scatter-enabled')],
+    ['overlay+all', config(...FEATURES)],
 ];
 
 // Fractional scaling changes the costs a lot: PAPER_SCALE sets the scale

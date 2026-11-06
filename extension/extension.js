@@ -207,9 +207,23 @@ uniform sampler2D u_screen;
 uniform sampler2D u_detail;
 uniform sampler2D u_tone;
 uniform sampler2D u_grain_tile;
-uniform sampler2D u_gamut;
-uniform vec2 u_gamut_size;
+uniform sampler2D u_lut;
+uniform float u_lut_size;
 uniform sampler2D u_ink_tile;
+
+// The print colours lookup table (tools/printlut.py), a 3D table laid out
+// like Mutter's: red along x, green + blue × size along y. Linear within a
+// blue slice, mixed between the two nearest slices.
+vec3 print_lut(vec3 c) {
+    float n = u_lut_size;
+    vec3 s = clamp(c, 0.0, 1.0) * (n - 1.0);
+    float b0 = floor(s.b);
+    float b1 = min(b0 + 1.0, n - 1.0);
+    float x = (s.r + 0.5) / n;
+    vec3 lo = texture2D(u_lut, vec2(x, (s.g + 0.5 + b0 * n) / (n * n))).rgb;
+    vec3 hi = texture2D(u_lut, vec2(x, (s.g + 0.5 + b1 * n) / (n * n))).rgb;
+    return mix(lo, hi, s.b - b0);
+}
 `;
 
 /**
@@ -276,49 +290,12 @@ if (u_ink > 0.0) {
 
 // Print can't reach the colourfulness of emitted light, least of all in
 // blue, violet and green. Colours outside the gamut of offset print on
-// uncoated paper (u_gamut, see tools/printgamut.py) move in OKLab towards
-// the grey of their hue's most colourful print colour, with a soft knee so
-// gradients stay smooth. Greys and colours print can reach stay untouched,
-// greys skip the conversion.
-if (u_print > 0.0 && max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)) > 1.0 / 1024.0) {
-    vec3 lin = mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
-    vec3 lms = pow(lin * mat3(
-        0.4122214708, 0.5363325363, 0.0514459929,
-        0.2119034982, 0.6806995451, 0.1073969566,
-        0.0883024619, 0.2817188376, 0.6299787005), vec3(1.0 / 3.0));
-    vec3 lab = lms * mat3(
-        0.2104542553, 0.7936177850, -0.0040720468,
-        1.9779984951, -2.4285922050, 0.4505937099,
-        0.0259040371, 0.7827717662, -0.8086757660);
-    float chroma = length(lab.yz);
-    float column = (fract(atan(lab.z, lab.y) / 6.2831853) * (u_gamut_size.x - 1.0) + 0.5) /
-        u_gamut_size.x;
-    float cusp = texture2D(u_gamut, vec2(column, 0.0)).g;
-    vec2 p = vec2(lab.x - cusp, chroma);
-    float angle = atan(p.y, p.x) / 3.14159265;
-    float limit = texture2D(u_gamut,
-        vec2(column, (angle * (u_gamut_size.y - 1.0) + 0.5) / u_gamut_size.y)).r;
-    float x = length(p) / max(limit, 1e-4);
-    // Towards the grey axis the knee moves out to the boundary, so light
-    // greys close to white stay put.
-    float knee = 1.0 - 0.2 * chroma / length(p);
-    if (x > knee) {
-        float y = (x - knee) / max(1.0 - knee, 1e-4);
-        float squeezed = knee + (1.0 - knee) * y / sqrt(1.0 + y * y);
-        p *= mix(1.0, squeezed / x, u_print);
-        lab = vec3(cusp + p.x, lab.yz * (p.y / chroma));
-        lms = lab * mat3(
-            1.0, 0.3963377774, 0.2158037573,
-            1.0, -0.1055613458, -0.0638541728,
-            1.0, -0.0894841775, -1.2914855480);
-        lin = clamp((lms * lms * lms) * mat3(
-            4.0767416621, -3.3077115913, 0.2309699292,
-            -1.2684380046, 2.6097574011, -0.3413193965,
-            -0.0041960863, -0.7034186147, 1.7076147010), 0.0, 1.0);
-        c = mix(12.92 * lin, 1.055 * pow(lin, vec3(1.0 / 2.4)) - 0.055,
-            step(0.0031308, lin));
-    }
-}
+// uncoated paper move in OKLab towards the grey of their hue's most
+// colourful print colour, with a soft knee so gradients stay smooth (see
+// tools/printgamut.py and preview.py print_colours()). Baked into a lookup
+// table. Greys and colours print can reach stay untouched, greys skip it.
+if (u_print > 0.0 && max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)) > 1.0 / 1024.0)
+    c = mix(c, print_lut(c), u_print);
 ${reliefGlsl('paper_uv', 'u_detail', 'u_tone', 'u_grain_tile')}${PAPER_MULTIPLY}${paperOverGlsl('u_tone')}
 c = c * multiply * (1.0 - over.a) + over.rgb;
 cogl_color_out = vec4(c * color.a, color.a);
@@ -698,13 +675,15 @@ class PaperPrintEffect extends Clutter.Effect {
         snippet.set_replace(PRINT_SHADER);
         pipeline.add_snippet(snippet);
         // Layer 0 is the copy, set per copy.
-        const {detail, tone, grain, gamut, ink} = this._textures;
-        [detail, tone, grain, gamut, ink].forEach((texture, i) => {
+        const {detail, tone, grain, lut, ink} = this._textures;
+        [detail, tone, grain, lut, ink].forEach((texture, i) => {
             pipeline.set_layer_texture(i + 1, texture);
-            pipeline.set_layer_wrap_mode(i + 1, texture === gamut
+            pipeline.set_layer_wrap_mode(i + 1, texture === lut
                 ? Cogl.PipelineWrapMode.CLAMP_TO_EDGE : Cogl.PipelineWrapMode.REPEAT);
         });
-        ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_gamut', 'u_ink_tile'].forEach((name, layer) =>
+        // The lookup table is read between its entries.
+        pipeline.set_layer_filters(4, Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR);
+        ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_lut', 'u_ink_tile'].forEach((name, layer) =>
             pipeline.set_uniform_1i(pipeline.get_uniform_location(name), layer));
         // The copy is opaque.
         pipeline.set_blend('RGBA = ADD(SRC_COLOR, 0)');
@@ -905,7 +884,7 @@ class PaperPrintEffect extends Clutter.Effect {
             ...this._values,
             tone_ratio: this._textures.toneRatio,
             grain_ratio: this._textures.grainRatio,
-            gamut_size: this._textures.gamutSize,
+            lut_size: this._textures.lutSize,
             origin: area.slice(0, 2),
             extent: area.slice(2),
             texel: [1 / width, 1 / height],
@@ -1536,20 +1515,20 @@ class PaperOverlay {
             pruneCache(this._cacheDir).catch(e =>
                 console.error(`Paper my Shell: cannot clean up the texture cache: ${e.message}`));
         }
-        const [detail, tone, grain, ink, gamut] = await Promise.all([
+        const [detail, tone, grain, ink, lut] = await Promise.all([
             ...files.map(file => loadTexture(file, cancellable)),
-            loadTexture(this._extension.dir.get_child('print-gamut.png'), cancellable),
+            loadTexture(this._extension.dir.get_child('print-lut.png'), cancellable),
         ]);
         return {
             detail,
             tone,
             grain,
-            gamut,
+            lut,
             ink,
             detailSize: detail.get_width(),
             toneRatio: detail.get_width() / (tone.get_width() * TONE_SCALE),
             grainRatio: detail.get_width() / grain.get_width(),
-            gamutSize: [gamut.get_width(), gamut.get_height()],
+            lutSize: lut.get_width(),
             periodic: isPeriodic(name),
         };
     }

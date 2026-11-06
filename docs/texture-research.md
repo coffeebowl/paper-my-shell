@@ -155,7 +155,7 @@ maps them into the print gamut in OKLab:
 - The gamut comes from the convex hull of the FOGRA52 patches, mapped
   media-relative with black point compensation, so it only limits chroma.
   `tools/printgamut.py` stores it as a 73 × 33 table
-  (`print-gamut.png`).
+  (`tools/print-gamut.png`).
 - Colours move towards the grey at the lightness of their hue's most
   colourful print colour (the cusp). Keeping lightness instead would
   bleach yellows and light greens: print yellow peaks at lightness 0.89,
@@ -165,6 +165,14 @@ maps them into the print gamut in OKLab:
   stay exact.
 - Pixels with equal RGB channels skip the conversion, most of a desktop
   is grey.
+- The shader doesn't compute any of this. `tools/printlut.py` bakes the
+  mapping into a 65³ table (`print-lut.png`, laid out like Mutter's 3D
+  LUTs for ICC profiles: red along x, green + blue × 65 along y; Cogl has
+  no 3D textures). Two linear lookups and a mix between blue slices
+  replace the OKLab conversions and the trigonometry. Against the exact
+  mapping: mean 0.28 levels, 99.9 % within 1.4, at most 5; 33³ would be
+  off by up to 10. A strength below 1 mixes in sRGB instead of moving in
+  OKLab, hardly different.
 
 The paper is computed in the same shader while the effect is on, which
 saves the overlay passes. It is drawn per monitor like the overlay.

@@ -132,7 +132,8 @@ fullscreen") or HDR are left out and keep the overlay where it applies.
   list of textures.
 - `tools/preview.py`: mirrors the shaders in numpy and composites a
   texture over a test card or a screenshot.
-- `tools/printgamut.py`: builds the print gamut table.
+- `tools/printgamut.py`: builds the print gamut table, `tools/printlut.py`
+  bakes print colours into the shader's lookup table.
 - `tools/headless/`: runs the extension in an isolated headless GNOME
   Shell.
 
@@ -174,13 +175,16 @@ believable textures and ideas for more materials.
 
 ### Print gamut
 
-`extension/print-gamut.png` is the print gamut for print colours,
-generated from Fogra's characterisation data for uncoated paper
+`tools/print-gamut.png` is the print gamut for print colours, generated
+from Fogra's characterisation data for uncoated paper
 ([FOGRA52.txt](https://registry.color.org/cmyk-registry/fogra52), not in
-the repository):
+the repository). The shader doesn't read it: `extension/print-lut.png` is
+the whole mapping baked into a 65³ lookup table, made from the gamut by
+the same code `preview.py` uses:
 
 ```sh
-make gamut FOGRA=path/to/FOGRA52.txt
+make gamut FOGRA=path/to/FOGRA52.txt   # gamut, then the lookup table
+make lut                               # only the lookup table
 ```
 
 ## License

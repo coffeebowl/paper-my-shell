@@ -14,7 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from printgamut import oklab_to_srgb, srgb_to_oklab
 
-GAMUT = Path(__file__).resolve().parent.parent / "extension" / "print-gamut.png"
+GAMUT = Path(__file__).resolve().parent / "print-gamut.png"
+LUT = Path(__file__).resolve().parent.parent / "extension" / "print-lut.png"
 
 # As in papergen.js and extension.js.
 TONE_SCALE = 8
@@ -105,7 +106,8 @@ def sample(table, x, y):
 
 
 def print_colours(b, gamut, strength):
-    """Move colours print can't reach into its gamut, as PRINT_SHADER."""
+    """Move colours print can't reach into its gamut. The exact mapping,
+    printlut.py bakes it into the shader's lookup table."""
     table = np.asarray(Image.open(gamut).convert("RGB"), np.float32) / 255
     lab = srgb_to_oklab(b)
     chroma = np.hypot(lab[..., 1], lab[..., 2])
@@ -124,6 +126,27 @@ def print_colours(b, gamut, strength):
     hue_dir = lab[..., 1:] / np.maximum(chroma, 1e-6)[..., None]
     lab = np.concatenate([(cusp + p[..., 0])[..., None], hue_dir * p[..., 1:]], -1)
     return np.clip(oklab_to_srgb(lab), 0, 1)
+
+
+def lookup(table, c):
+    """The lookup table at colours `c`, as PRINT_SHADER reads it: linear
+    within a blue slice, mixed between the two nearest slices."""
+    n = table.shape[1]
+    s = np.clip(c, 0, 1) * (n - 1)
+    b0 = np.floor(s[..., 2])
+    b1 = np.minimum(b0 + 1, n - 1)
+    lo = sample(table, s[..., 0], s[..., 1] + b0 * n)
+    hi = sample(table, s[..., 0], s[..., 1] + b1 * n)
+    return lo + (hi - lo) * (s[..., 2] - b0)[..., None]
+
+
+def print_lut(b, lut, strength):
+    """Print colours as PRINT_SHADER does them, from the lookup table.
+    Greys stay exact."""
+    table = np.asarray(Image.open(lut).convert("RGB"), np.float32) / 255
+    mapped = b + (lookup(table, b) - b) * strength
+    grey = (b.max(-1) - b.min(-1) <= 1 / 1024)[..., None]
+    return np.where(grey, b, mapped)
 
 
 def ink_spread(b, soak, amount):
@@ -170,7 +193,7 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
     if ink > 0:
         b = ink_spread(b, tiled(texdir / "ink.png", w, h), ink)
     if print_colors > 0:
-        b = print_colours(b, GAMUT, print_colors)
+        b = print_lut(b, LUT, print_colors)
     ds, dl = relief(texdir / "detail.png", w, h)
     ts, tl = relief(texdir / "tone.png", w, h, TONE_SCALE)
     shadow = 1 - (1 - ds) * (1 - ts) * (1 - grain * gs)

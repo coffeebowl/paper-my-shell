@@ -80,7 +80,7 @@
       <range min="0.0" max="1.0"/>
       <default>0.2</default>
       <summary>Matte amount</summary>
-      <description>Gives the screen the blacks of print: even the darkest ink reflects some light, so shadows lift while midtones and white stay. White gets slightly warmer. 1 is the black of uncoated paper. Renders the screen offscreen first, so changes on screen cost more GPU time.</description>
+      <description>Gives the screen the blacks of print: even the darkest ink reflects some light, so shadows lift while midtones and white stay. White gets slightly warmer. 1 is the black of uncoated paper. Renders the screen offscreen first, at about the cost of the paper texture.</description>
     </key>
 
     <key name="print-colors-enabled" type="b">
@@ -91,7 +91,7 @@
       <range min="0.0" max="1.0"/>
       <default>1.0</default>
       <summary>Print-like colours</summary>
-      <description>Limits colours to what offset print on uncoated paper can reach. 1 is the full print gamut. Renders the screen offscreen first, so changes on screen cost more GPU time.</description>
+      <description>Limits colours to what offset print on uncoated paper can reach. 1 is the full print gamut. Renders the screen offscreen first, at about the cost of the paper texture.</description>
     </key>
 
     <key name="ink-spread-enabled" type="b">
@@ -102,7 +102,7 @@
       <range min="0.0" max="1.0"/>
       <default>0.4</default>
       <summary>Ink spread</summary>
-      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Shares the offscreen rendering with the matte look and print colours.</description>
+      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Reads neighbouring pixels, so big changes on screen cost more GPU time. Shares the offscreen rendering with the matte look and print colours.</description>
     </key>
 
     <key name="light-scatter-enabled" type="b">
@@ -113,7 +113,7 @@
       <range min="0.0" max="1.0"/>
       <default>0.6</default>
       <summary>Light scattering</summary>
-      <description>Light that enters the paper next to ink scatters under it and is absorbed, so dark strokes get a faint soft halo and light gaps between them get a little darker. 1 is a scattering length of 0.25 mm, the most absorbent uncoated paper; sized from the size the monitor reports. Shares the offscreen rendering with the matte look, print colours and ink spread.</description>
+      <description>Light that enters the paper next to ink scatters under it and is absorbed, so dark strokes get a faint soft halo and light gaps between them get a little darker. 1 is a scattering length of 0.25 mm, the most absorbent uncoated paper; sized from the size the monitor reports. Reads the same neighbouring pixels as ink spread, so big changes on screen cost more GPU time, but little more with ink spread on.</description>
     </key>
 
     <key name="shift-texture" type="b">

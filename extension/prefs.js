@@ -187,7 +187,7 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const print = new Adw.PreferencesPage({
             title: _('Print'),
             icon_name: 'printer-symbolic',
-            description: _('These effects need the finished picture, so the screen is rendered offscreen first. Small changes like a blinking cursor cost little, big ones like scrolling a whole window cost more GPU time than the paper effects alone. That is paid once: with one effect on, the other adds little, and the paper effects are drawn in the same pass for free. A still screen costs nothing.'),
+            description: _('These effects need the finished picture, so the screen is rendered offscreen first and the paper effects are drawn in the same pass. Small changes like a blinking cursor cost about as much as without them. The matte look and print colours cost no more than the paper effects alone. Ink spread and light scattering read neighbouring pixels, so big changes like scrolling a whole window cost more GPU time; together they read them only once. A still screen costs nothing.'),
         });
         print.add(featureGroup(settings, 'paper-black-enabled', _('Matte'),
             _('The blacks of print instead of a screen: even the darkest ink reflects some light, so shadows lift while midtones and white stay. White gets slightly warmer. 100 % is the black of uncoated paper.'), [

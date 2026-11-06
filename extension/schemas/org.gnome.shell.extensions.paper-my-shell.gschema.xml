@@ -56,7 +56,7 @@
       <range min="0.0" max="0.2"/>
       <default>0.04</default>
       <summary>Ink mottle</summary>
-      <description>Ink soaks into the paper unevenly and lightens dark areas in soft patches that follow the paper's formation.</description>
+      <description>Ink soaks into the paper unevenly and lightens dark areas in soft patches that follow the paper's formation. Dark areas don't get lighter overall.</description>
     </key>
 
     <key name="brightness-enabled" type="b">

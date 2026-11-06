@@ -78,7 +78,14 @@ monitor, and the illusion shouldn't fight that.
   formation, so solid dark areas have soft lighter patches. That is the
   tone tile again at a quarter of its size (stretched 2× instead of 8×),
   added to the OVER pass. `d + (1 − d) · a` only shows on dark areas,
-  so light ones stay clean and it costs one texture lookup.
+  so light ones stay clean and it costs one texture lookup. The tone
+  tile is centred on 0.5, so taken as it is the patches varied by about
+  two levels on top of an even lift of five (at 4 %), along a straight
+  line like the old matte look, which washed the screen out. Mottle
+  starts at the tile's deepest dips instead (0.3): the same cloud, with
+  two fifths of the lift. Keeping only what lies above 0.5 removed the
+  floor completely but also the cloud's dark half, leaving small light
+  islands.
 - **Ink spread.** Needs neighbouring pixels, so it runs in the offscreen
   pass with print colours. Real ink on uncoated paper grows strokes with
   sharp, ragged edges (boundary roughening, see MoXi) and feathers along

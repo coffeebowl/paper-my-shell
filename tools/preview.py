@@ -21,6 +21,7 @@ LUT = Path(__file__).resolve().parent.parent / "extension" / "print-lut.png"
 TONE_SCALE = 8
 PAPER_BLACK = 0.05 * np.array([1, 0.97, 0.92]) ** 2.2
 MOTTLE_STRETCH = 2
+MOTTLE_FLOOR = 0.3
 INK_SHARE = 0.7
 INK_STRENGTH = 0.9
 INK_FEATHER = 0.9
@@ -230,7 +231,7 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
     shadow = 1 - (1 - ds) * (1 - ts) * (1 - grain * gs)
     light = 1 - (1 - dl) * (1 - tl) * (1 - grain * gl)
     ms, ml = relief(texdir / "tone.png", w, h, MOTTLE_STRETCH)
-    cloud = (mottle * (0.5 + 0.5 * (ml - ms)))[..., None]
+    cloud = (mottle * np.maximum(0.5 - MOTTLE_FLOOR + 0.5 * (ml - ms), 0))[..., None]
 
     # Multiply: shadows and the tint (1 without matte).
     b = b * brightness * tint * (1 - intensity * shadow)[..., None]

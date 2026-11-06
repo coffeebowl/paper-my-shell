@@ -34,6 +34,11 @@ const TILES = ['detail', 'tone', 'grain', 'ink'];
 // tone tile again, stretched only by this factor.
 const MOTTLE_STRETCH = 2;
 
+// The tone tile's lowest values (0.5 is flat paper, the deepest dips of the
+// textures lie around 0.3). Mottle starts there, so the whole cloud shows
+// without lifting all blacks.
+const MOTTLE_FLOOR = 0.3;
+
 // Size of a texel in mm the textures are drawn for, a logical pixel at
 // about 110 dpi. With true size on, tiles scale to keep it on every monitor.
 const TEXEL_MM = 0.23;
@@ -137,8 +142,11 @@ float shade = u_brightness * (1.0 - u_intensity * shadow);
 /**
  * GLSL composited OVER the screen: relief highlights over uneven ink
  * (mottle: ink soaks into the paper's cloudy formation unevenly, which
- * lightens dark areas in patches). Dimmed along with the rest so nothing
- * gets brighter than the dimmed white.
+ * lightens dark areas in patches). The cloud without the even floor under
+ * it, which would only lift blacks along a straight line and wash the
+ * screen out: its darkest spots, where ink went on thickest, stay as they
+ * are. Dimmed along with the rest so nothing gets brighter than the dimmed
+ * white.
  *
  * @param {string} toneSampler
  * @returns {string}
@@ -146,7 +154,7 @@ float shade = u_brightness * (1.0 - u_intensity * shadow);
 function paperOverGlsl(toneSampler) {
     return `
 vec4 cloud = texture2D(${toneSampler}, uv * u_tone_ratio * ${(TONE_SCALE / MOTTLE_STRETCH).toFixed(1)});
-float mottle = u_mottle * (0.5 + cloud.r - 0.5 * cloud.a);
+float mottle = u_mottle * max(${(0.5 - MOTTLE_FLOOR).toFixed(2)} + cloud.r - 0.5 * cloud.a, 0.0);
 float highlight = u_intensity * u_balance * light;
 vec4 over = vec4(vec3(highlight), highlight) + vec4(vec3(mottle), mottle) * (1.0 - highlight);
 over.rgb *= u_brightness;

@@ -138,13 +138,19 @@ The Python tools need numpy, Pillow and SciPy; `make venv` sets them up in
 
 `tools/headless/run.sh` starts the extension in an isolated headless GNOME
 Shell (own settings and cache, real GPU) next to a helper extension that
-takes screenshots or measures frame costs:
+takes screenshots, checks partial redraws or measures frame costs:
 
 ```sh
 tools/headless/run.sh check /tmp/out                     # screenshots
 BG='#c04040' tools/headless/run.sh check /tmp/out 1600x1000,1280x800 print-colors-enabled=true
+PAPER_SCALE=1.25 tools/headless/run.sh verify /tmp/out 2000x1250 ink-spread-enabled=true
 TIMEOUT=400 tools/headless/run.sh perf /tmp/out 3840x2160
 ```
+
+`verify` moves a square over a test card in small steps, then saves what
+the monitor shows (`partial.png`) and the same after a full repaint
+(`full.png`). The two have to be equal. Screenshots can't show this, they
+render a fresh offscreen copy.
 
 ### Textures
 

@@ -1,0 +1,6 @@
+{
+  "uuid": "verify@local",
+  "name": "Paper my Shell verify",
+  "description": "Headless test helper: compares the screen after partial redraws with a full repaint.",
+  "shell-version": ["51"]
+}

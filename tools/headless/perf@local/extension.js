@@ -1,5 +1,6 @@
 import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -108,13 +109,37 @@ async function measure(label, animate) {
 
 const CONFIGS = [
     ['off', {'enabled': false}],
-    ['overlay', {'enabled': true, 'print-colors-enabled': false}],
-    ['overlay+print', {'enabled': true, 'print-colors-enabled': true}],
+    ['overlay', {'enabled': true, 'print-colors-enabled': false, 'ink-spread-enabled': false}],
+    ['overlay+print', {'enabled': true, 'print-colors-enabled': true, 'ink-spread-enabled': false}],
+    ['overlay+ink', {'enabled': true, 'print-colors-enabled': false, 'ink-spread-enabled': true}],
+    ['overlay+print+ink', {'enabled': true, 'print-colors-enabled': true, 'ink-spread-enabled': true}],
 ];
+
+// Fractional scaling changes the costs a lot: PAPER_SCALE sets the scale
+// of the first monitor (a temporary config) before measuring.
+async function applyScale(scale) {
+    const call = (method, args) => new Promise((resolve, reject) => Gio.DBus.session.call(
+        'org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig',
+        'org.gnome.Mutter.DisplayConfig', method, args, null, Gio.DBusCallFlags.NONE, -1, null,
+        (c, r) => {
+            try {
+                resolve(c.call_finish(r));
+            } catch (e) {
+                reject(e);
+            }
+        }));
+    const [serial, monitors] = (await call('GetCurrentState', null)).deepUnpack();
+    const [[connector], modes] = monitors[0];
+    const mode = modes.find(m => m[6]['is-current']?.unpack()) ?? modes[0];
+    await call('ApplyMonitorsConfig', new GLib.Variant('(uua(iiduba(ssa{sv}))a{sv})',
+        [serial, 1, [[0, 0, scale, 0, true, [[connector, mode[0], {}]]]], {}]));
+}
 
 async function run() {
     await wait(3000);
     Main.overview.hide();
+    if (GLib.getenv('PAPER_SCALE'))
+        await applyScale(Number(GLib.getenv('PAPER_SCALE')));
     await wait(1500);
     const {_settings: settings, _overlay: overlay} = Main.extensionManager.lookup(UUID).stateObj;
     await waitForTextures(overlay);

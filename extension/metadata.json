@@ -1,7 +1,7 @@
 {
   "uuid": "paper-my-shell@coffeebowl",
   "name": "Paper my Shell",
-  "description": "Lays a realistic paper texture over the whole screen. The texture is a static GPU tile, so it costs next to nothing.",
+  "description": "Lays a realistic paper texture over the whole screen, with the blacks, colours and ink of print. Nothing animates, so a still screen costs nothing.",
   "url": "https://github.com/coffeebowl/paper-my-shell",
   "shell-version": ["51"],
   "session-modes": ["user", "unlock-dialog"],

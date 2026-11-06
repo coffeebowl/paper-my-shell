@@ -27,8 +27,9 @@
     </key>
     <key name="intensity" type="d">
       <range min="0.0" max="1.0"/>
-      <default>0.04</default>
+      <default>0.05</default>
       <summary>Texture intensity</summary>
+      <description>Low values look most natural. Screens with low contrast, or with blacks or whites cut off by their settings, may need higher values.</description>
     </key>
     <key name="dark-balance" type="d">
       <range min="0.0" max="1.0"/>
@@ -73,7 +74,7 @@
     <!-- The matte look. Replaces the keys matte-enabled and matte, which
          lifted along a straight line on another scale. -->
     <key name="paper-black-enabled" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Apply the matte look</summary>
     </key>
     <key name="paper-black" type="d">
@@ -84,7 +85,7 @@
     </key>
 
     <key name="print-colors-enabled" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Use print-like colours</summary>
     </key>
     <key name="print-colors" type="d">
@@ -95,18 +96,18 @@
     </key>
 
     <key name="ink-spread-enabled" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Let ink spread into the paper</summary>
     </key>
     <key name="ink-spread" type="d">
       <range min="0.0" max="1.0"/>
       <default>0.4</default>
       <summary>Ink spread</summary>
-      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Reads neighbouring pixels, so big changes on screen cost more GPU time. Shares the offscreen rendering with the matte look and print colours.</description>
+      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. On some OLED panels whose subpixels are not laid out in plain RGB stripes, the ragged edges can look worse. Looks best at a display scale of 125 % or more, where strokes are wider than the edge. Reads neighbouring pixels, so big changes on screen cost more GPU time. Shares the offscreen rendering with the matte look and print colours.</description>
     </key>
 
     <key name="light-scatter-enabled" type="b">
-      <default>false</default>
+      <default>true</default>
       <summary>Scatter light in the paper</summary>
     </key>
     <key name="light-scatter" type="d">

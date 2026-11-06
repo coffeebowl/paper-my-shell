@@ -10,7 +10,10 @@ screen costs nothing.
 ## Features
 
 Each effect can be switched on and off on its own. The defaults come from
-the settings schema and are shown in the preferences.
+the settings schema and are shown in the preferences. Most effects are
+subtle on purpose and change dark and light areas by only a few levels;
+screens with low contrast, or with blacks or whites cut off by their
+settings, may need higher values.
 
 - **Paper texture**: a shaded relief of tooth, fibres and pulp formation,
   lit from the upper left. Shadows multiply the content and highlights
@@ -29,16 +32,19 @@ the settings schema and are shown in the preferences.
   reflects some light, so shadows lift and turn to charcoal at the
   maximum, as on uncoated paper, while midtones and white stay. White
   gets a touch warmer.
-- **Print colours** (experimental): limits colours to what offset print on
-  uncoated paper can reach. Blues, violets and bright greens get much
-  calmer, reds and yellows stay strong, greys don't change.
-- **Ink spread** (experimental): dark strokes grow a little where the
-  paper takes ink, with ragged edges, and creep along fibres in short
-  feathers, like ink on absorbent paper.
-- **Light scattering** (experimental): light that enters the paper next to
-  ink scatters under it, so dark strokes get a faint soft halo and light
-  gaps between them get a little darker. Sized in millimetres from the
-  scattering length of uncoated paper.
+- **Print colours**: limits colours to what offset print on uncoated
+  paper can reach. Blues, violets and bright greens get much calmer, reds
+  and yellows stay strong, greys don't change.
+- **Ink spread** (more GPU time on big changes): dark strokes grow a
+  little where the paper takes ink, with ragged edges, and creep along
+  fibres in short feathers, like ink on absorbent paper. On some OLED
+  panels whose subpixels aren't laid out in plain RGB stripes the ragged
+  edges can look worse; it looks best at a display scale of 125 % or
+  more.
+- **Light scattering** (more GPU time on big changes): light that enters
+  the paper next to ink scatters under it, so dark strokes get a faint
+  soft halo and light gaps between them get a little darker. Sized in
+  millimetres from the scattering length of uncoated paper.
 - **Stays out of the way**: monitors showing a fullscreen window hide the
   overlay, so games and videos keep direct scanout (can be turned off).
   The texture starts at a random position at every login and unlock, so

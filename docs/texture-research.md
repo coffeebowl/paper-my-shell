@@ -97,25 +97,37 @@ that.
     fibre texture has strands.
   - A pixel darkens towards its darkest neighbour (strokes grow) only
     where absorbency passes a hard threshold, so the edge turns ragged
-    but stays sharp. At full amount 30 % of the paper takes ink, 60 %
-    strength.
-  - On a fibre it also darkens towards the ink one and two whole pixels
-    along it, the feathers, weighted 1/d² so they fade instead of
-    standing out. Whole pixels keep it independent of filtering.
+    but stays sharp. The threshold is taken at four points inside the
+    pixel and averaged, so a pixel can take part of the ink: one
+    decision per pixel made the ragged edge out of whole pixels, which
+    read as noise at scale 1 (at 1.25 the old 2× offscreen copy averaged
+    it by accident).
+  - On a fibre it also darkens towards the ink one and two steps along
+    it, the feathers, weighted 1/d² so they fade instead of standing out.
+    More steps that grow with the amount were tried: hardly visible, the
+    far steps get lost in the texture, and every step costs two reads.
+  - Neighbours and steps are half a pixel, read with linear filtering.
+    Whole pixels made strokes heavy and smeared small text; half a pixel
+    grows them by less than a pixel and softens the ragged edges, at
+    every scale. Reading between two pixels halves a neighbour's pull,
+    which the strengths make up for.
   - Everything scales with the amount, feathers included, or even 1 %
-    would show hard outliers. Growing a full pixel would make text
-    illegible, real dot gain is well below 0.23 mm.
-  - Neighbours are clamped to the pixel's monitor. Around and between
-    the monitors the offscreen copy is black, which would otherwise ink
-    the outermost pixels.
+    would show hard outliers. The share of paper that takes ink grows
+    linearly (70 % at full amount), strength and feathers with the
+    square root (90 % at full), so 40 % (the default) already looks like
+    ink, and more of it reaches more places instead of only
+    getting darker. Growing a full pixel would make text illegible, real
+    dot gain is well below 0.23 mm.
+  - Neighbours are clamped to the pixel's monitor, ink doesn't cross
+    from one monitor to the next.
   - Cost: the four neighbours, one ink lookup and up to four along the
     fibre, little next to the offscreen pass itself.
 - **True size.** Mutter's `DisplayConfig.GetResources` reports each
   output's size in mm (from EDID). Tiles are scaled so a texel stays
   0.23 mm, the logical pixel size the textures were made on (about
   110 dpi). Most monitors run at a scale that keeps logical pixels near
-  that anyway, so the difference is usually small. The print pass gets
-  each monitor's tile size as a uniform array too.
+  that anyway, so the difference is usually small. The print pass is
+  drawn per monitor, with that monitor's tile size.
 
 ## Print colours
 
@@ -137,8 +149,8 @@ That is close to the opposite of print.
 
 Blending can't do this either: it works per channel, so lifting green and
 blue of a red pixel also lifts them in black. The print colours setting
-therefore runs a `Shell.GLSLEffect` on `uiGroup` that sees the finished
-pixels and maps them into the print gamut in OKLab:
+therefore runs an effect on `uiGroup` that sees the finished pixels and
+maps them into the print gamut in OKLab:
 
 - The gamut comes from the convex hull of the FOGRA52 patches, mapped
   media-relative with black point compensation, so it only limits chroma.
@@ -151,31 +163,71 @@ pixels and maps them into the print gamut in OKLab:
 - A soft knee starts at 80 % of the boundary, so gradients stay smooth.
   It moves out to the boundary towards the grey axis, so whites and greys
   stay exact.
-- Pixels with equal RGB channels skip the conversion. While the effect is
-  on every frame repaints the whole screen, and most of a desktop is grey.
+- Pixels with equal RGB channels skip the conversion, most of a desktop
+  is grey.
 
 The paper is computed in the same shader while the effect is on, which
-saves the two overlay passes. It is laid out per monitor like the overlay,
-from the monitor rectangles as a uniform array (up to four).
+saves the overlay passes. It is drawn per monitor like the overlay.
 
-Pitfall: offscreen effects and partial redraws. On a partial redraw Clutter
-re-renders the offscreen copy, but Mutter culls everything outside the
-changed area (background and windows paint only their clip region), so the
-rest of the copy is black. Queueing a full redraw of `uiGroup` from a stage
-signal fixes the picture but can keep frames coming forever. What works is
-`Clutter.add_debug_flags(0, DrawDebugFlag.DISABLE_CLIPPED_REDRAWS, 0)` while
-the effect is on, as Blur my Shell does: frames that happen anyway get
-widened to the whole screen, a still screen stays still. With several
-monitors each one is painted separately into the shared copy, so the effect
-also forces `ACTOR_DIRTY` on every paint there.
+Pitfall: offscreen effects and partial redraws. A `ClutterOffscreenEffect`
+clears its copy and re-renders it on every frame, but on a partial redraw
+Mutter culls everything outside the changed area (background and windows
+paint only their clip region), so the rest of the copy is black. Turning
+off clipped redraws (`DrawDebugFlag.DISABLE_CLIPPED_REDRAWS`, as Blur my
+Shell does) fixes the picture, but then every changing frame repaints the
+whole screen, a blinking cursor as much as scrolling. Instead the effect
+builds its own paint nodes and keeps a copy per monitor between frames,
+painting only the redraw clip into it:
 
-Pitfall: where the offscreen copy lies. The shader maps its texture
-coordinates back to the screen to line the paper up with the overlay.
-Clutter places the copy on the actor's paint volume, or on its allocation
-when there is none, and one child without a paint volume is enough for
-that. Real sessions often have such windows, a bare test desktop
-doesn't. `get_paint_box()` returns nothing then, so using it stretched the
-relief until only a soft gradient was left.
+- The clip goes onto the copy as a region clip (`push_region_clip`). A
+  `ClutterClipNode` intersects its rectangles, so with a clip made of
+  several the copy got nothing. St widgets don't cull, without the clip
+  translucent ones would blend over their own previous frame.
+- At fractional scales Mutter repaints the screen in whole framebuffer
+  pixels and hands the UI a clip rounded out to stage pixels again. The
+  copy takes the pixels whose centre lies in that clip, which includes
+  every pixel the screen gets and only pixels the background really
+  repaints.
+- Ink spread reads neighbours, so pixels just outside a change change too.
+  Mutter has no way for an extension to widen the redraw clip of the
+  current frame (its redraw clip filters are private), so the ring is
+  queued for the next frame. The ring itself is damage then, and buffer
+  age brings back older damage, rings included: widening those again
+  would keep frames coming forever. The last ring and old rings lying
+  wholly in the clip are left out (buffer age brings a frame's damage back
+  whole, an old ring only partly in the clip has damage on it). A clip of
+  rings only queues nothing, so a still screen settles a few frames after
+  the last change.
+- At fractional scales that isn't exact by itself. Mutter unites the
+  damage in framebuffer pixels, splits it into bands and rounds each band
+  back out to stage pixels, in float, so the clip gets a fringe the screen
+  doesn't get, and gaps of a pixel or two between damage get swallowed
+  into the clip without being repainted. The framebuffer clip itself can't
+  be read from an extension. So rings are kept in framebuffer pixels, like
+  Mutter's damage, and each ring is remembered as what Mutter will make of
+  it: the pixels it surely repaints on the screen, and a mask of all the
+  pixels it can add to the next clip (an edge on a pixel boundary can
+  round either way, depending on how the region is cut into bands). No
+  rounding can make a ring look like a change then, not even when buffer
+  age brings it back with older damage. The rounding runs on whole regions
+  in C (`Mtk.Region.apply_matrix_transform_expand`); going through the
+  rectangles in JS cost more than the repaints it saved. Near a change
+  the ring also takes in what the clip got without the screen: the fringe
+  along the clip's edge, and gaps next to the last ring. A framebuffer
+  pixel spans at most two stage pixels at scales of 1 and more, so the
+  rounding fills gaps of two stage pixels at most; widths are measured per
+  scale rather than written down for a few. What it still misses (a change
+  hidden under a ring, gaps between other damage) is repainted once more,
+  as a ring, after the screen has been still for 100 ms.
+- Rings kept in stage pixels, as before, were rounded twice per round
+  trip. With buffer age the slivers that left looked like changes and
+  started rings of their own, which fed back into thousands of rectangles
+  per frame and stalled the shell. As a safety net, a ring of more than a
+  few hundred rectangles still repaints the screen whole instead and
+  starts over. The headless shell has no buffer age; the perf helper can
+  emulate it (`PAPER_EMULATE_AGE`).
+- Screenshots paint the stage without a monitor view; they get a fresh
+  copy of their whole area.
 
 Considered instead: giving windows a narrower colour state
 (`Clutter.Actor.set_color_state`) so Mutter's own colour transforms

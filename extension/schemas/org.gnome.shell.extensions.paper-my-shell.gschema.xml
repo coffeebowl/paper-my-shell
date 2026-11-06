@@ -84,7 +84,7 @@
       <range min="0.0" max="1.0"/>
       <default>1.0</default>
       <summary>Print-like colours</summary>
-      <description>Limits colours to what offset print on uncoated paper can reach. 1 is the full print gamut. Renders the whole screen offscreen first, so it costs GPU time.</description>
+      <description>Limits colours to what offset print on uncoated paper can reach. 1 is the full print gamut. Renders the screen offscreen first, so changes on screen cost more GPU time.</description>
     </key>
 
     <key name="ink-spread-enabled" type="b">

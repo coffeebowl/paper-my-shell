@@ -3,7 +3,9 @@ import Cogl from 'gi://Cogl';
 import GdkPixbuf from 'gi://GdkPixbuf';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Graphene from 'gi://Graphene';
 import GObject from 'gi://GObject';
+import Mtk from 'gi://Mtk';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -38,15 +40,37 @@ const TEXEL_MM = 0.23;
 
 // Ink spread at full amount, keep in sync with preview.py: the share of
 // the paper that takes ink, how far a pixel darkens towards its darkest
-// neighbour, and towards the ink one pixel along a fibre (a quarter of
-// that two pixels along).
-const INK_SHARE = 0.3;
-const INK_STRENGTH = 0.6;
-const INK_FEATHER = 0.6;
+// neighbour, and towards the ink one step along a fibre (a quarter of that
+// two steps along). The share grows with the amount, the strengths with its
+// square root: half the amount still looks like ink, more of it spreads to
+// more places rather than only darker.
+const INK_SHARE = 0.7;
+const INK_STRENGTH = 0.9;
+const INK_FEATHER = 0.9;
 
-// The print effect spans all monitors and gets their geometry as uniform
-// arrays of this length.
-const MAX_MONITORS = 4;
+// Distance of the ink neighbours and length of a feather step, in physical
+// pixels. Half a pixel, read with linear filtering, lets strokes grow by
+// less than a pixel and softens the ragged edges. It also halves the pull
+// of a neighbour, which the strengths above make up for.
+const INK_REACH = 0.5;
+
+// How far the ink of a pixel reaches its neighbours, in whole physical
+// pixels. A change repaints this much around it one frame later.
+const INK_RING = Math.ceil(2 * INK_REACH);
+
+// Mutter keeps the damage of this many frames for buffer age, so a redraw
+// clip can contain areas painted that long ago.
+const DAMAGE_HISTORY = 16;
+
+// At fractional scales, how long the screen has to be still before the
+// area that changed is repainted once more, in ms.
+const SETTLE_DELAY = 100;
+
+// More rectangles than this in a ring or in the area waiting to settle, and
+// the screen is repainted whole instead. A safety net: should rings ever
+// start rings of their own, they could build up to thousands of rectangles;
+// one full repaint costs less and starts over clean.
+const RING_MAX_RECTS = 256;
 
 // Schema maximum of the matte key.
 const MATTE_MAX = 0.5;
@@ -60,8 +84,6 @@ const PAPER_BLACK = 0.05 / MATTE_MAX;
 const MID_GREY = 0.46;
 
 const FIT_SAMPLES = Array.from({length: 65}, (_, i) => i / 64);
-
-const NO_CLIPPED_REDRAWS = Clutter.DrawDebugFlag.DISABLE_CLIPPED_REDRAWS;
 
 // Settings that only change values or visibility, not the textures.
 const SYNC_KEYS = [
@@ -169,16 +191,18 @@ cogl_color_out = over;
 
 // Print colours and ink spread need the finished pixels, so the UI is
 // rendered offscreen first. The paper is then applied in the same pass
-// instead of the overlay.
+// instead of the overlay. Drawn per monitor: u_origin and u_extent are the
+// stage area of the offscreen copy, u_monitor the monitor's.
 const PRINT_UNIFORMS = `${UNIFORMS}
 uniform float u_print;
 uniform float u_ink;
 uniform vec2 u_origin;
 uniform vec2 u_extent;
-uniform vec2 u_pixel;
+uniform vec2 u_texel;
+uniform vec2 u_reach;
 uniform vec2 u_shift;
-uniform vec4 u_monitors[${MAX_MONITORS}];
-uniform float u_tile_sizes[${MAX_MONITORS}];
+uniform vec4 u_monitor;
+uniform float u_tile_size;
 uniform sampler2D u_screen;
 uniform sampler2D u_detail;
 uniform sampler2D u_tone;
@@ -190,8 +214,8 @@ uniform sampler2D u_ink_tile;
 
 /**
  * GLSL reading the offscreen copy `offset` away from `st`, kept on the
- * monitor bounds `lo` and `hi`: around and between the monitors the copy is
- * black, which would darken the edges.
+ * monitor bounds `lo` and `hi`: ink doesn't cross from one monitor to the
+ * next.
  *
  * @param {string} offset - GLSL vec2 expression
  * @returns {string}
@@ -205,46 +229,46 @@ vec2 st = cogl_tex_coord0_in.st;
 vec4 color = texture2D(u_screen, st) * cogl_color_in;
 vec3 c = color.a > 0.0 ? color.rgb / color.a : color.rgb;
 
-// The paper is laid out per monitor like the overlay, each monitor with its
-// own tile size.
+// The paper is laid out per monitor like the overlay.
 vec2 pos = u_origin + st * u_extent;
-vec2 paper_uv = pos / u_tile_sizes[0];
-vec4 monitor = vec4(u_origin, u_extent);
-for (int i = 0; i < ${MAX_MONITORS}; i++) {
-    vec4 m = u_monitors[i];
-    if (pos.x >= m.x && pos.y >= m.y && pos.x < m.x + m.z && pos.y < m.y + m.w) {
-        paper_uv = (pos - m.xy) / u_tile_sizes[i];
-        monitor = m;
-    }
-}
-paper_uv += u_shift;
+vec2 paper_uv = (pos - u_monitor.xy) / u_tile_size + u_shift;
 
 // Ink soaks into the paper (u_ink_tile, see papergen.js ink()). Strokes
 // grow towards their darkest neighbour, but only where the paper takes ink,
 // on its fibres and raised grain: a hard threshold, so edges turn ragged
-// instead of soft. Where a fibre runs through a pixel, ink also creeps along
-// it, the short feathers of ink on absorbent paper, fading with the square
-// of the distance. Everything scales with the amount. Never lightens.
+// instead of soft. It is taken at four points inside the pixel, so a pixel
+// takes part of the ink and the ragged edge isn't made of whole pixels.
+// Where a fibre runs through a pixel, ink also creeps along it, the short
+// feathers of ink on absorbent paper, fading with the square of the
+// distance. Everything scales with the amount. Never lightens.
 if (u_ink > 0.0) {
-    vec3 soak = texture2D(u_ink_tile, paper_uv * u_grain_ratio).rgb;
-    vec2 lo = (monitor.xy - u_origin) / u_extent + 0.5 * u_pixel;
-    vec2 hi = (monitor.xy + monitor.zw - u_origin) / u_extent - 0.5 * u_pixel;
+    vec2 ink_uv = paper_uv * u_grain_ratio;
+    vec3 soak = texture2D(u_ink_tile, ink_uv).rgb;
+    vec2 quarter = 0.25 * u_extent * u_texel / u_tile_size * u_grain_ratio;
+    float threshold = 1.0 - ${INK_SHARE.toFixed(2)} * u_ink;
+    float take = 0.25 * (
+        step(threshold, texture2D(u_ink_tile, ink_uv + quarter).b) +
+        step(threshold, texture2D(u_ink_tile, ink_uv - quarter).b) +
+        step(threshold, texture2D(u_ink_tile, ink_uv + vec2(quarter.x, -quarter.y)).b) +
+        step(threshold, texture2D(u_ink_tile, ink_uv + vec2(-quarter.x, quarter.y)).b));
+    float strength = sqrt(u_ink);
+    vec2 lo = (u_monitor.xy - u_origin) / u_extent + 0.5 * u_texel;
+    vec2 hi = (u_monitor.xy + u_monitor.zw - u_origin) / u_extent - 0.5 * u_texel;
     vec3 near = min(
-        min(${neighbourGlsl('vec2(u_pixel.x, 0.0)')}, ${neighbourGlsl('vec2(-u_pixel.x, 0.0)')}),
-        min(${neighbourGlsl('vec2(0.0, u_pixel.y)')}, ${neighbourGlsl('vec2(0.0, -u_pixel.y)')}));
-    float take = step(1.0 - ${INK_SHARE.toFixed(2)} * u_ink, soak.b);
-    vec3 spread = c + (near - c) * take * ${INK_STRENGTH.toFixed(2)} * u_ink;
+        min(${neighbourGlsl('vec2(u_reach.x, 0.0)')}, ${neighbourGlsl('vec2(-u_reach.x, 0.0)')}),
+        min(${neighbourGlsl('vec2(0.0, u_reach.y)')}, ${neighbourGlsl('vec2(0.0, -u_reach.y)')}));
+    vec3 spread = c + (near - c) * take * ${INK_STRENGTH.toFixed(2)} * strength;
     vec2 along = soak.rg * 2.0 - 1.0;
     if (length(along) >= 0.5) {
-        // Doubled angle back to the fibre, in whole pixels.
+        // Doubled angle back to the fibre, in whole steps.
         float angle = 0.5 * atan(along.y, along.x);
         vec2 fibre = vec2(cos(angle), sin(angle));
         for (int i = 1; i <= 2; i++) {
             float distance = float(i);
-            vec2 reach = floor(distance * fibre + 0.5) * u_pixel;
+            vec2 reach = floor(distance * fibre + 0.5) * u_reach;
             vec3 far = min(${neighbourGlsl('reach')}, ${neighbourGlsl('-reach')});
             spread = min(spread,
-                c + (far - c) * ${INK_FEATHER.toFixed(2)} * u_ink / (distance * distance));
+                c + (far - c) * ${INK_FEATHER.toFixed(2)} * strength / (distance * distance));
         }
     }
     c = min(c, spread);
@@ -357,93 +381,805 @@ function setUniforms(pipeline, values) {
 }
 
 /**
+ * The rectangles of a region as plain numbers. Mtk.Region.get_rectangle()
+ * returns a struct by value, which crashes GJS. The iterator works, but
+ * hands out the same rectangle every time, and the ring maths runs on
+ * every frame, so this reads only the numbers.
+ *
+ * @param {Mtk.Region} region
+ * @returns {number[][]} x, y, width, height
+ */
+function regionRects(region) {
+    const rects = [];
+    const it = new Mtk.RegionIterator();
+    for (it.init(region); !it.at_end(); it.next()) {
+        const r = it.rectangle;
+        rects.push([r.x, r.y, r.width, r.height]);
+    }
+    return rects;
+}
+
+/**
+ * Calls `f` with an Mtk.Rectangle for each of `rects`. Mutter copies the
+ * rectangles it is given, so one does for all.
+ *
+ * @param {number[][]} rects - x, y, width, height
+ * @param {Function} f
+ */
+function withRectangles(rects, f) {
+    const rect = new Mtk.Rectangle();
+    for (const r of rects) {
+        [rect.x, rect.y, rect.width, rect.height] = r;
+        f(rect);
+    }
+}
+
+/**
+ * The region grown by `d` on every side: united with copies of itself
+ * shifted across, then up and down, by 1, 2, 4 and so on, each step
+ * growing what the steps before grew. All in Mtk, which is much faster
+ * than growing each rectangle in JS.
+ *
+ * @param {Mtk.Region} region
+ * @param {number} d
+ * @returns {Mtk.Region}
+ */
+function grow(region, d) {
+    const grown = region.copy();
+    for (const across of [true, false]) {
+        for (let done = 0, step = 1; done < d; done += step, step *= 2) {
+            step = Math.min(step, d - done);
+            const base = grown.copy();
+            for (const shift of [-step, step]) {
+                const moved = base.copy();
+                moved.translate(across ? shift : 0, across ? 0 : shift);
+                grown.union(moved);
+            }
+        }
+    }
+    return grown;
+}
+
+/**
+ * @param {number[][]} rects - x, y, width, height
+ * @returns {Mtk.Rectangle} the rectangle around all of them
+ */
+function extents(rects) {
+    const x1 = Math.min(...rects.map(r => r[0]));
+    const y1 = Math.min(...rects.map(r => r[1]));
+    const x2 = Math.max(...rects.map(r => r[0] + r[2]));
+    const y2 = Math.max(...rects.map(r => r[1] + r[3]));
+    return new Mtk.Rectangle({x: x1, y: y1, width: x2 - x1, height: y2 - y1});
+}
+
+/**
+ * @param {number[]} a - x, y, width, height
+ * @param {number[]} b - x, y, width, height
+ * @returns {number[]|null} the overlap, null if there is none
+ */
+function intersect(a, b) {
+    const x1 = Math.max(a[0], b[0]);
+    const y1 = Math.max(a[1], b[1]);
+    const x2 = Math.min(a[0] + a[2], b[0] + b[2]);
+    const y2 = Math.min(a[1] + a[3], b[1] + b[3]);
+    return x2 > x1 && y2 > y1 ? [x1, y1, x2 - x1, y2 - y1] : null;
+}
+
+// Mutter turns the damage of a frame into framebuffer pixels and the result
+// back into the redraw clip the UI gets, rounding out each rectangle
+// (meta-stage-impl.c: offset_scale_and_clamp_region(),
+// scale_offset_and_clamp_region()). It does so in float: where a factor
+// isn't exact in float, an edge on a pixel boundary can end up on either
+// side of it, depending on how the region happens to be cut into
+// rectangles. The functions below work on whole regions in C, which is much
+// faster than going through the rectangles in JS.
+
+// How close to a pixel boundary an edge has to be for float maths to round
+// it either way, in pixels. Well above float precision at screen sizes,
+// well below the steps of any useful scale.
+const FLOAT_SLACK = 1 / 64;
+
+/**
+ * @param {Mtk.Region} region
+ * @param {number} sx - factor across
+ * @param {number} sy - factor down
+ * @param {number} dx - offset across, after scaling
+ * @param {number} dy - offset down, after scaling
+ * @returns {Mtk.Region} the region scaled and moved, each rectangle rounded
+ *   out
+ */
+function transformRegion(region, sx, sy, dx, dy) {
+    const matrix = new Graphene.Matrix().init_scale(sx, sy, 1);
+    matrix.translate(new Graphene.Point3D({x: dx, y: dy, z: 0}));
+    return region.apply_matrix_transform_expand(matrix);
+}
+
+/**
+ * Like transformRegion(), with either outcome of float rounding on pixel
+ * boundaries: the widest one, or about what all outcomes share (whole
+ * regions intersected can keep a pixel in inner corners). Factors with few
+ * binary digits (1, 1.25, 2) are exact and round one way only.
+ *
+ * @param {Mtk.Region} region
+ * @param {number} scale
+ * @param {number} dx
+ * @param {number} dy
+ * @param {boolean} wide
+ * @returns {Mtk.Region}
+ */
+function roundRegion(region, scale, dx, dy, wide) {
+    if (Number.isInteger(scale * 64))
+        return transformRegion(region, scale, scale, dx, dy);
+    let result = null;
+    for (const ex of [-FLOAT_SLACK, FLOAT_SLACK]) {
+        for (const ey of [-FLOAT_SLACK, FLOAT_SLACK]) {
+            const r = transformRegion(region, scale, scale, dx + ex, dy + ey);
+            if (!result)
+                result = r;
+            else if (wide)
+                result.union(r);
+            else
+                result.intersect(r);
+        }
+    }
+    return result;
+}
+
+/**
+ * Damage to framebuffer pixels.
+ *
+ * @param {Mtk.Region} region - on the stage
+ * @param {number} scale - of the view, a float
+ * @param {Mtk.Rectangle} layout - of the view
+ * @param {boolean} wide
+ * @returns {Mtk.Region}
+ */
+function toFramebuffer(region, scale, layout, wide) {
+    return roundRegion(region, scale, -layout.x * scale, -layout.y * scale, wide);
+}
+
+/**
+ * Framebuffer pixels to the redraw clip the UI gets.
+ *
+ * @param {Mtk.Region} region - in framebuffer pixels
+ * @param {number} scale - of the view, a float
+ * @param {Mtk.Rectangle} layout - of the view
+ * @param {boolean} wide
+ * @returns {Mtk.Region}
+ */
+function toStage(region, scale, layout, wide) {
+    // Mutter scales by the inverse, in float.
+    return roundRegion(region, Math.fround(1 / scale), layout.x, layout.y, wide);
+}
+
+/**
+ * The framebuffer pixels whose centre lies inside a stage region. At
+ * fractional scales these are the ones the UI really paints anew (the
+ * background, for one, fills only pixels whose centre it covers). Goes
+ * through the rectangles: rounding whole regions can't do this exactly.
+ *
+ * @param {Mtk.Region} region - on the stage
+ * @param {Mtk.Rectangle} layout - of the view
+ * @param {number} width - of the framebuffer
+ * @param {number} height - of the framebuffer
+ * @returns {Mtk.Region}
+ */
+function centrePixels(region, layout, width, height) {
+    const toPixel = (v, origin, ratio, size) =>
+        Math.min(Math.max(Math.ceil((v - origin) * ratio - 0.5), 0), size);
+    const rects = [];
+    for (const [rx, ry, rw, rh] of regionRects(region)) {
+        const x = toPixel(rx, layout.x, width / layout.width, width);
+        const y = toPixel(ry, layout.y, height / layout.height, height);
+        const x2 = toPixel(rx + rw, layout.x, width / layout.width, width);
+        const y2 = toPixel(ry + rh, layout.y, height / layout.height, height);
+        if (x2 > x && y2 > y)
+            rects.push([x, y, x2 - x, y2 - y]);
+    }
+    const pixels = Mtk.Region.create();
+    withRectangles(rects, r => pixels.union_rectangle(r));
+    return pixels;
+}
+
+/**
+ * @param {Mtk.Region} region
+ * @returns {number[]} start and end across of the region, which must not
+ *   be empty
+ */
+function spanAcross(region) {
+    const rects = regionRects(region);
+    return [Math.min(...rects.map(r => r[0])), Math.max(...rects.map(r => r[0] + r[2]))];
+}
+
+/**
+ * How Mutter's rounding widens areas at a scale, in framebuffer pixels:
+ * how far the pixels painted anew (the clip in framebuffer pixels) reach
+ * past the damage, how wide a gap the rounding can fill, and how wide a
+ * ring with fringe and gaps ends up in the next clip, with the damage it
+ * causes widened by the fringe (a mask, see PaperPrintEffect._repainted()).
+ * Measured along a stretch of pixels rather than derived where float
+ * rounding comes in, so it holds for any scale.
+ *
+ * @param {number} scale - of the view, a float
+ * @param {number} ratio - framebuffer pixels per stage pixel
+ * @returns {object} fringe, ring and gap widths
+ */
+function roundingWidths(scale, ratio) {
+    const size = 1 << 14;
+    const origin = new Mtk.Rectangle({x: 0, y: 0, width: size, height: size});
+    const strip = (x, w) => Mtk.Region.create_rectangle(new Mtk.Rectangle({x, y: 0, width: w, height: 1}));
+    // Damage always comes in stage pixels.
+    let fringe = 0;
+    for (let x = 1; x < 64; x++) {
+        const [d1, d2] = spanAcross(toFramebuffer(strip(x, 1), scale, origin, false));
+        const wide = toFramebuffer(strip(x, 1), scale, origin, true);
+        const [p1, p2] = spanAcross(centrePixels(toStage(wide, scale, origin, true),
+            origin, size * ratio, size * ratio));
+        fringe = Math.max(fringe, d1 - p1, p2 - d2);
+    }
+    // A pixel spans at most two stage cells, so a cell that only rounding
+    // brings into the clip borders a damaged one: gaps it fills are at
+    // most two cells wide.
+    const gap = fringe > 0 ? Math.ceil(2 * ratio) : 0;
+    // A ring is INK_RING outside the clip, plus the fringe and gaps inside
+    // it.
+    let ring = 0;
+    for (let x = 1; x < 64; x++) {
+        for (let w = 1; w <= INK_RING + fringe + gap; w++) {
+            const stage = transformRegion(strip(x, w), 1 / ratio, 1 / ratio, 0, 0);
+            const [d1, d2] = spanAcross(toFramebuffer(stage, scale, origin, true));
+            ring = Math.max(ring, d2 - d1 + 2 * fringe);
+        }
+    }
+    return {fringe, ring, gap};
+}
+
+/**
  * Ink spread, print colours and paper in one pass over an offscreen copy of
- * the UI. Only attached while one of the first two is on, since rendering
- * offscreen costs an extra full-screen pass on every change. The overlay is
- * hidden then.
+ * the UI, drawn back per monitor. Only attached while one of the first two
+ * is on. The overlay is hidden then on the monitors it covers.
+ *
+ * Each monitor view keeps its copy between frames, and a frame only paints
+ * its redraw clip into it, so partial redraws keep working: the window group
+ * and the background already paint only the clip, a region clip on the copy
+ * keeps the rest of the UI inside it too. Everything outside the clip is
+ * unchanged in the copy. The copy has the resolution of the view's
+ * framebuffer, so fractional scaling doesn't resample it.
+ *
+ * Ink spread reads neighbours, so pixels just outside a changed area change
+ * as well. Mutter offers no way to widen the redraw clip of the frame from
+ * an extension, so that ring is repainted one frame later.
  */
 const PaperPrintEffect = GObject.registerClass(
-class PaperPrintEffect extends Clutter.ShaderEffect {
+class PaperPrintEffect extends Clutter.Effect {
     constructor(textures) {
         super();
         this._textures = textures;
         this._values = {};
-        this._pipeline = null;
+        this._tileSizes = [];
+        this._skipped = new Set();
+        this._template = null;
+        this._plain = null;
+        // Per view framebuffer: the copy, its pipelines and recent rings.
+        this._copies = new Map();
+        this._pendingRedraws = [];
+        this._fullRedraw = false;
+        this._settleId = 0;
+        global.stage.connectObject('after-paint', (_stage, view) => this._afterPaint(view), this);
     }
 
-    // Called once for the class, Clutter adds the snippet to the offscreen
-    // pipeline.
-    vfunc_get_static_snippet() {
+    /**
+     * @param {object} values - shader uniforms
+     * @param {number[]} tileSizes - detail tile size per monitor index
+     * @param {Set<number>} skipped - monitor indices to leave untouched
+     */
+    setValues(values, tileSizes, skipped) {
+        this._values = values;
+        this._tileSizes = tileSizes;
+        this._skipped = skipped;
+        // The output changes everywhere.
+        this.get_actor()?.queue_redraw();
+    }
+
+    destroy() {
+        global.stage.disconnectObject(this);
+        if (this._settleId)
+            GLib.source_remove(this._settleId);
+        this._settleId = 0;
+        this._copies.clear();
+        this._pendingRedraws = [];
+    }
+
+    _getTemplate(ctx) {
+        if (this._template)
+            return this._template;
+        const pipeline = Cogl.Pipeline.new(ctx);
         const snippet = Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, PRINT_UNIFORMS, null);
         snippet.set_replace(PRINT_SHADER);
-        return snippet;
+        pipeline.add_snippet(snippet);
+        // Layer 0 is the copy, set per copy.
+        const {detail, tone, grain, gamut, ink} = this._textures;
+        [detail, tone, grain, gamut, ink].forEach((texture, i) => {
+            pipeline.set_layer_texture(i + 1, texture);
+            pipeline.set_layer_wrap_mode(i + 1, texture === gamut
+                ? Cogl.PipelineWrapMode.CLAMP_TO_EDGE : Cogl.PipelineWrapMode.REPEAT);
+        });
+        ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_gamut', 'u_ink_tile'].forEach((name, layer) =>
+            pipeline.set_uniform_1i(pipeline.get_uniform_location(name), layer));
+        // The copy is opaque.
+        pipeline.set_blend('RGBA = ADD(SRC_COLOR, 0)');
+        this._template = pipeline;
+        return pipeline;
     }
 
-    setValues(values) {
-        this._values = values;
-        this.queue_repaint();
-    }
-
-    vfunc_paint(node, paintContext, flags) {
-        // Each monitor is painted separately and only fills its own part of
-        // the offscreen copy, so with several monitors it can't be reused.
-        if (Main.layoutManager.monitors.length > 1)
-            flags |= Clutter.EffectPaintFlags.ACTOR_DIRTY;
-        super.vfunc_paint(node, paintContext, flags);
-    }
-
-    vfunc_paint_target(node, paintContext) {
-        // Layer 0 is the offscreen copy, the paper textures and the gamut
-        // table go next to it. Clutter makes a new pipeline whenever it
-        // recreates the offscreen buffer (new size or scale), so they are
-        // set again then.
-        const pipeline = this.get_pipeline();
-        if (pipeline !== this._pipeline) {
-            const {detail, tone, grain, gamut, ink} = this._textures;
-            [detail, tone, grain, gamut, ink].forEach((texture, i) => {
-                pipeline.set_layer_texture(i + 1, texture);
-                pipeline.set_layer_wrap_mode(i + 1, texture === gamut
-                    ? Cogl.PipelineWrapMode.CLAMP_TO_EDGE : Cogl.PipelineWrapMode.REPEAT);
-            });
-            ['u_screen', 'u_detail', 'u_tone', 'u_grain_tile', 'u_gamut', 'u_ink_tile'].forEach((name, layer) =>
-                pipeline.set_uniform_1i(pipeline.get_uniform_location(name), layer));
-            this._pipeline = pipeline;
+    /**
+     * A pipeline drawing `texture` with the print shader, or unchanged for
+     * monitors that are skipped.
+     *
+     * @param {Cogl.Context} ctx
+     * @param {Cogl.Texture} texture
+     * @param {boolean} plain
+     * @returns {Cogl.Pipeline}
+     */
+    _pipeline(ctx, texture, plain) {
+        if (plain && !this._plain) {
+            this._plain = Cogl.Pipeline.new(ctx);
+            this._plain.set_blend('RGBA = ADD(SRC_COLOR, 0)');
         }
-        // Texture coordinates span the offscreen buffer. Clutter sizes it
-        // from the actor's paint volume, or its allocation when one of the
-        // children has no paint volume (common with real windows), in local
-        // coordinates: right/bottom edge rounded up past 0.75 px of padding,
-        // the size rounded plus 3 px, the rest goes to the left/top
-        // (_clutter_actor_box_enlarge_for_effects). uiGroup sits at the
-        // stage origin, so this maps straight back to stage coordinates and
-        // the paper lines up with the overlay.
+        const pipeline = (plain ? this._plain : this._getTemplate(ctx)).copy();
+        pipeline.set_layer_texture(0, texture);
+        pipeline.set_layer_wrap_mode(0, Cogl.PipelineWrapMode.CLAMP_TO_EDGE);
+        // Ink reads neighbours between texels. The centre sample still hits
+        // the texel exactly, the copy maps 1:1 onto the framebuffer.
+        pipeline.set_layer_filters(0, Cogl.PipelineFilter.LINEAR, Cogl.PipelineFilter.LINEAR);
+        return pipeline;
+    }
+
+    /**
+     * @param {Cogl.Framebuffer} fb
+     * @returns {object} texture and framebuffer of an offscreen copy the
+     *   size of `fb`
+     */
+    _createCopy(fb) {
+        const texture = Cogl.Texture2D.new_with_size(fb.get_context(), fb.get_width(), fb.get_height());
+        const fbo = Cogl.Offscreen.new_with_texture(texture);
+        fbo.allocate();
+        return {texture, fbo};
+    }
+
+    // Same matrices as the target, so the actor paints into the copy exactly
+    // as it would paint into the target.
+    _syncMatrices(fbo, fb) {
+        fbo.set_projection_matrix(fb.get_projection_matrix());
+        fbo.set_modelview_matrix(fb.get_modelview_matrix());
+        fbo.set_viewport(...fb.get_viewport4fv());
+    }
+
+    vfunc_paint_node(node, paintContext, _flags) {
         const actor = this.get_actor();
-        const volume = actor.get_paint_volume();
-        let x1, y1, x2, y2;
-        if (volume) {
-            const origin = volume.get_origin();
-            [x1, y1] = [origin.x, origin.y];
-            [x2, y2] = [x1 + volume.get_width(), y1 + volume.get_height()];
-        } else {
-            ({x1, y1, x2, y2} = actor.get_allocation_box());
+        // The magnifier paints clones of the UI. They get no paper, like
+        // the overlay outside of uiGroup.
+        if (actor.is_in_clone_paint()) {
+            node.add_child(Clutter.ActorNode.new(actor, -1));
+            return;
         }
-        const width = Math.round(x2 - x1);
-        const height = Math.round(y2 - y1);
-        x2 = Math.ceil(x2 + 0.75);
-        y2 = Math.ceil(y2 + 0.75);
-        x1 = x2 - width - 3;
-        y1 = y2 - height - 3;
-        const [, textureWidth, textureHeight] = this.get_target_size();
+        const fb = paintContext.get_framebuffer();
+        const view = global.stage.peek_stage_views().find(v => v.get_framebuffer() === fb);
+        if (view)
+            this._paintView(node, paintContext, view, fb);
+        else
+            this._paintOther(node, paintContext, fb);
+    }
+
+    /**
+     * Paint to a monitor: update the view's copy inside the redraw clip,
+     * then draw it back.
+     */
+    _paintView(node, paintContext, view, fb) {
+        const actor = this.get_actor();
+        const layout = new Mtk.Rectangle();
+        view.get_layout(layout);
+        const area = [layout.x, layout.y, layout.width, layout.height];
+        const monitors = this._monitorsIn(area);
+
+        // Monitors showing a fullscreen window or HDR are left alone, so
+        // the window can be scanned out directly. Their copy goes stale.
+        if (monitors.every(m => this._skipped.has(m.index))) {
+            this._copies.delete(fb);
+            node.add_child(Clutter.ActorNode.new(actor, -1));
+            return;
+        }
+
+        const width = fb.get_width();
+        const height = fb.get_height();
+        let copy = this._copies.get(fb);
+        if (!copy || copy.width !== width || copy.height !== height) {
+            this._pruneCopies();
+            copy = {
+                ...this._createCopy(fb), width, height, pipelines: new Map(), rings: [],
+                changed: Mtk.Region.create(), lastPaint: 0,
+                bounds: Mtk.Region.create_rectangle(new Mtk.Rectangle({x: 0, y: 0, width, height})),
+            };
+            this._copies.set(fb, copy);
+        }
+        copy.scale = view.get_scale();
+        this._syncMatrices(copy.fbo, fb);
+        this._popClip(copy);
+
+        // Into the copy without clearing it, only inside the redraw clip.
+        // A new copy is cleared and filled completely once; the screen
+        // outside this frame's clip needs it too, in the next frame.
+        const fresh = !copy.painted;
+        const clip = paintContext.get_redraw_clip();
+        let clipFb = null;
+        if (clip && !fresh) {
+            // St widgets don't cull, so translucent ones would blend over
+            // their own previous frame outside the clip. A clip node can't
+            // do this: it intersects its rectangles. The nodes are drawn
+            // after this returns, so the clip comes off after the paint.
+            clipFb = this._framebufferRegion(clip, layout, copy);
+            copy.fbo.push_region_clip(clipFb);
+            copy.clipped = true;
+        }
+        const root = Clutter.RootNode.new(copy.fbo, actor.get_color_state(),
+            new Cogl.Color({red: 0, green: 0, blue: 0, alpha: 0}),
+            fresh ? Cogl.BufferBit.COLOR : 0);
+        root.add_child(Clutter.ActorNode.new(actor, -1));
+        node.add_child(root);
+        copy.painted = true;
+        if (fresh && clip)
+            this._fullRedraw = true;
+        if (this._values.ink > 0) {
+            // Every frame leaves a ring, if only an empty one, so the next
+            // frame knows which one was last.
+            let changed = null;
+            if (clipFb)
+                changed = this._queueRing(copy, clipFb, layout);
+            else
+                this._pushRing(copy, this._repainted(Mtk.Region.create(), layout, copy));
+            if (this._roundingWidths(copy, layout).fringe > 0)
+                this._noteChange(copy, changed, clipFb);
+        }
+
+        // Back onto the monitor, the stage clips it to the redraw clip.
+        const ctx = fb.get_context();
+        for (const monitor of monitors) {
+            const plain = this._skipped.has(monitor.index);
+            const key = `${monitor.index}:${plain}`;
+            if (!copy.pipelines.has(key))
+                copy.pipelines.set(key, this._pipeline(ctx, copy.texture, plain));
+            node.add_child(this._quad(copy.pipelines.get(key), monitor, area, width, height));
+        }
+    }
+
+    /**
+     * Paint somewhere else (screenshots, screencasts without a view): into a
+     * temporary copy of the whole target, then back with the shader.
+     */
+    _paintOther(node, paintContext, fb) {
+        const actor = this.get_actor();
+        const width = fb.get_width();
+        const height = fb.get_height();
+        const {texture, fbo} = this._createCopy(fb);
+        this._syncMatrices(fbo, fb);
+        const root = Clutter.RootNode.new(fbo, actor.get_color_state(),
+            new Cogl.Color({red: 0, green: 0, blue: 0, alpha: 0}), Cogl.BufferBit.COLOR);
+        root.add_child(Clutter.ActorNode.new(actor, -1));
+        node.add_child(root);
+
+        // The stage area the target shows, from its viewport: the stage
+        // spans the viewport, scaled, offset by the area's origin.
+        const [vx, vy, vw, vh] = fb.get_viewport4fv();
+        const scaleX = vw / global.stage.width;
+        const scaleY = vh / global.stage.height;
+        const area = [-vx / scaleX, -vy / scaleY, width / scaleX, height / scaleY];
+        const ctx = fb.get_context();
+        for (const monitor of this._monitorsIn(area)) {
+            const pipeline = this._pipeline(ctx, texture, this._skipped.has(monitor.index));
+            node.add_child(this._quad(pipeline, monitor, area, width, height));
+        }
+    }
+
+    /**
+     * @param {number[]} area - stage area, x, y, width, height
+     * @returns {object[]} the monitors overlapping it
+     */
+    _monitorsIn(area) {
+        return Main.layoutManager.monitors.filter(m =>
+            intersect(area, [m.x, m.y, m.width, m.height]));
+    }
+
+    /**
+     * The part of the copy over `monitor`, with the print shader.
+     *
+     * @param {Cogl.Pipeline} pipeline
+     * @param {object} monitor
+     * @param {number[]} area - stage area of the copy
+     * @param {number} width - of the copy in pixels
+     * @param {number} height - of the copy in pixels
+     * @returns {Clutter.PaintNode}
+     */
+    _quad(pipeline, monitor, area, width, height) {
+        const bounds = [monitor.x, monitor.y, monitor.width, monitor.height];
         setUniforms(pipeline, {
             ...this._values,
             tone_ratio: this._textures.toneRatio,
             grain_ratio: this._textures.grainRatio,
             gamut_size: this._textures.gamutSize,
-            origin: [x1, y1],
-            extent: [x2 - x1, y2 - y1],
-            pixel: [1 / textureWidth, 1 / textureHeight],
+            origin: area.slice(0, 2),
+            extent: area.slice(2),
+            texel: [1 / width, 1 / height],
+            reach: [INK_REACH / width, INK_REACH / height],
+            monitor: bounds,
+            tile_size: this._tileSizes[monitor.index],
         });
-        super.vfunc_paint_target(node, paintContext);
+        const [x, y, w, h] = intersect(area, bounds);
+        const s = v => (v - area[0]) / area[2];
+        const t = v => (v - area[1]) / area[3];
+        const quad = Clutter.PipelineNode.new(pipeline);
+        quad.add_texture_rectangle(new Clutter.ActorBox({x1: x, y1: y, x2: x + w, y2: y + h}),
+            s(x), t(y), s(x + w), t(y + h));
+        return quad;
+    }
+
+    /**
+     * Queue the ring around what changed this frame, for the next frame.
+     *
+     * Everything is kept in pixels of the copy, where Mutter keeps damage
+     * and its history too. The clip holds this frame's damage, which
+     * includes last frame's ring, and with buffer age older frames' damage,
+     * which comes back whole. Rings change nothing, and taking them for
+     * changes would grow them forever. So the last ring is left out, and
+     * older rings whose damage lies entirely in the clip; an old ring only
+     * partly in it has new damage on it instead. Damage can land on a ring
+     * too, so pixels up to a ring's width from what is left count as
+     * changed as well. Damage that lands only on a ring and touches nothing
+     * else isn't seen. A clip of rings only queues nothing, which is how a
+     * still screen settles once real damage has left the history.
+     *
+     * At fractional scales Mutter repaints the screen in framebuffer pixels
+     * rounded out from the damage, and hands the UI that clip rounded out to
+     * stage pixels again. The clip, where the copy is painted anew, then
+     * holds pixels the screen doesn't get: along the clip's edge (the
+     * fringe), and in gaps the rounding fills between two damaged areas.
+     * Those near a change go into the ring too. Gaps can only be told next
+     * to last frame's ring; others, and changes hidden under rings, get
+     * repainted once the screen is still (_noteChange()).
+     *
+     * Each ring is remembered as what Mutter will repaint for it
+     * (_repainted()), so its rounding can't look like a change. Should rings
+     * still pile up, the screen is repainted whole (RING_MAX_RECTS).
+     *
+     * @param {object} copy
+     * @param {Mtk.Region} clip - in pixels of the copy
+     * @param {Mtk.Rectangle} layout - of the view
+     * @returns {Mtk.Region|null} what changed, as far as can be told; null
+     *   when the ring got too complex and the screen is repainted whole
+     */
+    _queueRing(copy, clip, layout) {
+        const widths = this._roundingWidths(copy, layout);
+        const changed = clip.copy();
+        const masks = Mtk.Region.create();
+        const repainted = Mtk.Region.create();
+        copy.rings.forEach((ring, i) => {
+            if (ring.damage.is_empty())
+                return;
+            const rest = ring.damage.copy();
+            rest.subtract(clip);
+            if (i === copy.rings.length - 1 || rest.is_empty()) {
+                masks.union(ring.mask);
+                repainted.union(ring.damage);
+            }
+        });
+        const lastSeeds = copy.rings[copy.rings.length - 1]?.seeds ?? Mtk.Region.create();
+        changed.subtract(masks);
+        let ring = Mtk.Region.create();
+        let seeds = null;
+        if (!changed.is_empty()) {
+            const near = grow(changed, widths.ring);
+            near.intersect(clip);
+            const reach = grow(near, INK_RING);
+            ring = reach.copy();
+            ring.subtract(clip);
+            ring.intersect(copy.bounds);
+            if (widths.fringe > 0) {
+                // In the clip and near a change; rings left out above did
+                // reach the screen.
+                const unseen = region => {
+                    region.intersect(clip);
+                    region.intersect(reach);
+                    region.subtract(repainted);
+                    return region;
+                };
+                const outside = copy.bounds.copy();
+                outside.subtract(clip);
+                const fringe = unseen(grow(outside, widths.fringe));
+                const gaps = unseen(grow(lastSeeds, widths.gap));
+                // Next frame looks for gaps next to this ring, but not next
+                // to what filled gaps: inside damage that is repainted every
+                // frame that would spread a little more each time.
+                seeds = ring.copy();
+                seeds.union(fringe);
+                ring.union(fringe);
+                ring.union(gaps);
+            }
+        }
+        const stage = this._stageRegion(ring, layout, copy);
+        if (stage.num_rectangles() > RING_MAX_RECTS) {
+            this._fullRedraw = true;
+            copy.rings = [];
+            this._pushRing(copy, this._repainted(Mtk.Region.create(), layout, copy));
+            return null;
+        }
+        this._pendingRedraws.push(...regionRects(stage));
+        const queued = this._repainted(stage, layout, copy);
+        if (seeds) {
+            // As the damage they cause, which is what gaps lie next to.
+            queued.seeds = toFramebuffer(this._stageRegion(seeds, layout, copy), copy.scale, layout, false);
+            queued.seeds.intersect(copy.bounds);
+        }
+        this._pushRing(copy, queued);
+        return changed;
+    }
+
+    _pushRing(copy, ring) {
+        copy.rings.push(ring);
+        if (copy.rings.length > DAMAGE_HISTORY)
+            copy.rings.shift();
+    }
+
+    _roundingWidths(copy, layout) {
+        const ratio = copy.width / layout.width;
+        const key = `${copy.scale}:${ratio}`;
+        if (copy.widthsKey !== key) {
+            copy.widths = roundingWidths(copy.scale, ratio);
+            copy.widthsKey = key;
+        }
+        return copy.widths;
+    }
+
+    /**
+     * @param {Mtk.Region} region - in pixels of the copy
+     * @param {Mtk.Rectangle} layout - of the view
+     * @param {object} copy
+     * @returns {Mtk.Region} stage pixels covering the region
+     */
+    _stageRegion(region, layout, copy) {
+        return transformRegion(region, layout.width / copy.width, layout.height / copy.height,
+            layout.x, layout.y);
+    }
+
+    /**
+     * What redrawing `region` will repaint. Mutter rounds it out to
+     * framebuffer pixels, the damage, and back to the stage for the clip,
+     * where the copy is painted at pixel centres inside. Going that way
+     * exactly means going through the rectangles in JS, which costs; the
+     * mask is the widest damage grown by the fringe instead, which holds
+     * all of it and is barely wider.
+     *
+     * @param {Mtk.Region} region - on the stage
+     * @param {Mtk.Rectangle} layout - of the view
+     * @param {object} copy
+     * @returns {object} regions in pixels of the copy: damage, what surely
+     *   reaches the screen, mask, all that can show up in the next clip, and
+     *   seeds, empty here: the damage of the ring's parts next frame's
+     *   damage can leave gaps next to (_queueRing())
+     */
+    _repainted(region, layout, copy) {
+        const damage = toFramebuffer(region, copy.scale, layout, false);
+        damage.intersect(copy.bounds);
+        const mask = grow(toFramebuffer(region, copy.scale, layout, true),
+            this._roundingWidths(copy, layout).fringe);
+        mask.intersect(copy.bounds);
+        return {damage, mask, seeds: Mtk.Region.create()};
+    }
+
+    /**
+     * Where rounding leaves a fringe (fractional scales): remember what
+     * changed, and repaint it once more, a little wider, when the screen has
+     * been still for a moment. Then every pixel near a change was painted
+     * from the final copy, whatever a ring left out. That repaint goes in as a ring, so it
+     * changes nothing and happens once. A frame that repaints the whole
+     * monitor leaves nothing to do.
+     *
+     * @param {object} copy
+     * @param {Mtk.Region|null} changed - from _queueRing()
+     * @param {Mtk.Region|null} clip - in pixels of the copy
+     */
+    _noteChange(copy, changed, clip) {
+        copy.lastPaint = GLib.get_monotonic_time();
+        const rest = copy.bounds.copy();
+        if (clip)
+            rest.subtract(clip);
+        if (rest.is_empty() || !changed) {
+            copy.changed = Mtk.Region.create();
+            return;
+        }
+        copy.changed.union(changed);
+        if (copy.changed.num_rectangles() > RING_MAX_RECTS)
+            copy.changed = Mtk.Region.create_rectangle(extents(regionRects(copy.changed)));
+        if (!copy.changed.is_empty() && !this._settleId) {
+            this._settleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, SETTLE_DELAY,
+                () => this._settle());
+        }
+    }
+
+    _settle() {
+        const now = GLib.get_monotonic_time();
+        let waiting = false;
+        for (const [fb, copy] of this._copies) {
+            if (copy.changed.is_empty())
+                continue;
+            if (now - copy.lastPaint < SETTLE_DELAY * 1000) {
+                waiting = true;
+                continue;
+            }
+            const view = global.stage.peek_stage_views().find(v => v.get_framebuffer() === fb);
+            if (!view) {
+                copy.changed = Mtk.Region.create();
+                continue;
+            }
+            const layout = new Mtk.Rectangle();
+            view.get_layout(layout);
+            const area = grow(copy.changed, this._roundingWidths(copy, layout).ring + INK_RING);
+            area.intersect(copy.bounds);
+            copy.changed = Mtk.Region.create();
+            const stage = this._stageRegion(area, layout, copy);
+            this._pushRing(copy, this._repainted(stage, layout, copy));
+            const actor = this.get_actor();
+            withRectangles(regionRects(stage), r => actor?.queue_redraw_with_clip(r));
+        }
+        if (waiting)
+            return GLib.SOURCE_CONTINUE;
+        this._settleId = 0;
+        return GLib.SOURCE_REMOVE;
+    }
+
+    /**
+     * @param {Mtk.Region} clip - in stage coordinates
+     * @param {Mtk.Rectangle} layout - of the view
+     * @param {object} copy
+     * @returns {Mtk.Region} the redraw clip in pixels of the copy
+     *   (centrePixels()); a method of its own so the headless perf helper
+     *   can hand it clips with emulated buffer age
+     */
+    _framebufferRegion(clip, layout, copy) {
+        return centrePixels(clip, layout, copy.width, copy.height);
+    }
+
+    _popClip(copy) {
+        if (!copy?.clipped)
+            return;
+        copy.fbo.pop_clip();
+        copy.clipped = false;
+    }
+
+    // After a view's paint: the clip of its copy comes off, and redraws can
+    // be queued again.
+    _afterPaint(view) {
+        this._popClip(this._copies.get(view.get_framebuffer()));
+        this._queuePending();
+    }
+
+    _queuePending() {
+        const actor = this.get_actor();
+        if (!actor)
+            return;
+        if (this._fullRedraw)
+            actor.queue_redraw();
+        else
+            withRectangles(this._pendingRedraws, r => actor.queue_redraw_with_clip(r));
+        this._fullRedraw = false;
+        this._pendingRedraws = [];
+    }
+
+    // Forget the copies of views that are gone.
+    _pruneCopies() {
+        const framebuffers = global.stage.peek_stage_views().map(v => v.get_framebuffer());
+        for (const fb of this._copies.keys()) {
+            if (!framebuffers.includes(fb))
+                this._copies.delete(fb);
+        }
     }
 });
 
@@ -697,7 +1433,7 @@ class PaperOverlay {
         this._textures = null;
         this._cancellable = null;
         this._print = null;
-        this._clippedRedrawsDisabled = false;
+        this._unredirectDisabled = false;
         this._pixelSizes = new Map();
         this._sizesCancellable = null;
         this._shift = randomShift();
@@ -923,49 +1659,52 @@ class PaperOverlay {
         const hideInFullscreen = s.get_boolean('hide-in-fullscreen');
         const fullscreen = index => hideInFullscreen && monitors[index]?.inFullscreen;
 
-        // The print effect spans all monitors, so any fullscreen window
-        // turns it off and the overlay takes over again.
-        const printActive = (print > 0 || ink > 0) && !monitors.some(m => fullscreen(m.index));
+        // The print effect leaves out monitors with a fullscreen window, so
+        // it can be scanned out, and HDR monitors, whose values the shader
+        // doesn't expect. HDR monitors keep the overlay.
+        const hdr = new Set(global.backend.get_monitor_manager().get_logical_monitors()
+            .filter(lm => lm.get_monitors().some(m => m.get_color_mode_string() === 'bt2100'))
+            .map(lm => lm.get_number()));
+        const skipped = new Set(monitors
+            .filter(m => fullscreen(m.index) || hdr.has(m.index)).map(m => m.index));
+        const printActive = (print > 0 || ink > 0) && monitors.some(m => !skipped.has(m.index));
         if (printActive) {
             if (!this._print) {
                 this._print = new PaperPrintEffect(this._textures);
                 Main.layoutManager.uiGroup.add_effect_with_name('paper-my-shell-print', this._print);
-                // A partial redraw would leave everything outside the
-                // changed area empty in the offscreen copy, so frames have
-                // to repaint the whole screen while the effect is on. This
-                // only widens frames that happen anyway, a still screen
-                // stays still.
-                const [, drawFlags] = Clutter.get_debug_flags();
-                this._clippedRedrawsDisabled = !(drawFlags & NO_CLIPPED_REDRAWS);
-                if (this._clippedRedrawsDisabled)
-                    Clutter.add_debug_flags(0, NO_CLIPPED_REDRAWS, 0);
             }
-            const slots = Array.from({length: MAX_MONITORS}, (_, i) => monitors[i]);
-            this._print.setValues({
-                ...values,
-                print,
-                ink,
-                shift: this._shiftTiles(),
-                monitors: slots.map(m => m ? [m.x, m.y, m.width, m.height] : [0, 0, 0, 0]),
-                tile_sizes: slots.map((m, i) => [this._tileSize(m ? i : 0)]),
-            });
+            this._print.setValues({...values, print, ink, shift: this._shiftTiles()},
+                monitors.map(m => this._tileSize(m.index)), skipped);
         } else {
             this._removePrint();
         }
+        // Mutter doesn't look at effects on parents of a fullscreen window
+        // and would scan it out past the effect.
+        this._setUnredirect(!printActive || hideInFullscreen);
 
         for (const {surface, monitorIndex} of this._surfaces) {
             surface.setValues(values, this._tileSize(monitorIndex), this._shiftTiles());
-            surface.visible = !printActive && !fullscreen(monitorIndex);
+            const printed = printActive && !skipped.has(monitorIndex);
+            surface.visible = !printed && !fullscreen(monitorIndex);
         }
     }
 
+    _setUnredirect(allowed) {
+        if (allowed === !this._unredirectDisabled)
+            return;
+        if (allowed)
+            global.compositor.enable_unredirect();
+        else
+            global.compositor.disable_unredirect();
+        this._unredirectDisabled = !allowed;
+    }
+
     _removePrint() {
+        this._setUnredirect(true);
         if (!this._print)
             return;
-        // Leave the flag alone if someone else had set it.
-        if (this._clippedRedrawsDisabled)
-            Clutter.remove_debug_flags(0, NO_CLIPPED_REDRAWS, 0);
         Main.layoutManager.uiGroup.remove_effect(this._print);
+        this._print.destroy();
         this._print = null;
     }
 

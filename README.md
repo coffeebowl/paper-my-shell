@@ -113,9 +113,14 @@ settings are uniforms, so changing them never rebuilds anything.
 
 Print colours and ink spread need the finished pixels, so the UI is
 rendered offscreen and one shader does them and the paper in a single pass
-instead of the overlay. Partial redraws would leave the offscreen copy
-incomplete, so while one of them is on every frame repaints the whole
-screen.
+instead of the overlay. Each monitor keeps its offscreen copy between
+frames, and a frame only repaints the part of it that changed, so a small
+change costs about as much as without the extension. Ink spread reads
+neighbouring pixels, so it repaints a pixel wide ring around each change
+one frame later; at fractional scales, where Mutter's rounding to device
+pixels can't be followed exactly, it also repaints the changed area once
+more when the screen has been still for a moment. Monitors showing a fullscreen window (with "hide in
+fullscreen") or HDR are left out and keep the overlay where it applies.
 
 ## Development
 

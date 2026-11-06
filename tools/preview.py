@@ -21,9 +21,10 @@ TONE_SCALE = 8
 PAPER_BLACK = 0.1
 MID_GREY = 0.46
 MOTTLE_STRETCH = 2
-INK_SHARE = 0.3
-INK_STRENGTH = 0.6
-INK_FEATHER = 0.6
+INK_SHARE = 0.7
+INK_STRENGTH = 0.9
+INK_FEATHER = 0.9
+INK_REACH = 0.5
 TINT_MIN_MATTE = 1 / (255 * 0.12)
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
@@ -128,23 +129,29 @@ def print_colours(b, gamut, strength):
 def ink_spread(b, soak, amount):
     """Strokes grow where the paper takes ink, and along fibres, as PRINT_SHADER."""
     h, w = b.shape[:2]
-    y, x = np.mgrid[0:h, 0:w]
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
 
     def at(dy, dx):
-        # Clamped to the image like the shader clamps to the monitor.
-        return b[np.clip(y + dy, 0, h - 1), np.clip(x + dx, 0, w - 1)]
+        # Linear filtering between pixels, clamped to the image like the
+        # shader clamps to the monitor.
+        return sample(b, x + dx, y + dy)
 
-    near = np.minimum.reduce([at(1, 0), at(-1, 0), at(0, 1), at(0, -1)])
-    take = (soak[..., 2] >= 1 - INK_SHARE * amount)[..., None]
-    spread = b + (near - b) * take * INK_STRENGTH * amount
+    r = INK_REACH
+    near = np.minimum.reduce([at(r, 0), at(-r, 0), at(0, r), at(0, -r)])
+    # The threshold at four points inside the pixel.
+    threshold = 1 - INK_SHARE * amount
+    take = np.mean([sample(soak, x + ox, y + oy)[..., 2] >= threshold
+                    for ox in (-0.25, 0.25) for oy in (-0.25, 0.25)], axis=0)[..., None]
+    strength = np.sqrt(amount)
+    spread = b + (near - b) * take * INK_STRENGTH * strength
     along = soak[..., :2] * 2 - 1
     fibre = (np.hypot(along[..., 0], along[..., 1]) >= 0.5)[..., None]
     angle = 0.5 * np.arctan2(along[..., 1], along[..., 0])
     for distance in (1, 2):
-        dx = np.floor(distance * np.cos(angle) + 0.5).astype(int)
-        dy = np.floor(distance * np.sin(angle) + 0.5).astype(int)
+        dx = np.floor(distance * np.cos(angle) + 0.5) * r
+        dy = np.floor(distance * np.sin(angle) + 0.5) * r
         far = np.minimum(at(dy, dx), at(-dy, -dx))
-        weight = fibre * INK_FEATHER * amount / distance**2
+        weight = fibre * INK_FEATHER * strength / distance**2
         spread = np.minimum(spread, b + (far - b) * weight)
     return np.minimum(b, spread)
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Mirrors the shaders in extension.js: ink spread and print colours, then a
-multiply for shadows and paper light, then an OVER for highlights, ink
-mottle and flare (in one blend on the GPU).
+Mirrors the shaders in extension.js: ink spread, print colours and the
+matte look, then a multiply for shadows and the tint, then an OVER for
+highlights and ink mottle (in one blend on the GPU).
 """
 
 import argparse
@@ -19,14 +19,12 @@ LUT = Path(__file__).resolve().parent.parent / "extension" / "print-lut.png"
 
 # As in papergen.js and extension.js.
 TONE_SCALE = 8
-PAPER_BLACK = 0.1
-MID_GREY = 0.46
+PAPER_BLACK = 0.05 * np.array([1, 0.97, 0.92]) ** 2.2
 MOTTLE_STRETCH = 2
 INK_SHARE = 0.7
 INK_STRENGTH = 0.9
 INK_FEATHER = 0.9
 INK_REACH = 0.5
-TINT_MIN_MATTE = 1 / (255 * 0.12)
 
 LOREM = ("Paper is a thin sheet material produced by mechanically or chemically "
          "processing cellulose fibres derived from wood, rags, grasses or other "
@@ -78,19 +76,15 @@ def relief(path, w, h, scale=1):
     return maps
 
 
-def matte_lift(matte):
-    """Black lift of the straight line closest to paper, as matteLift()."""
-    black = PAPER_BLACK * matte
-    d = np.linspace(0, 1, 65)
-    paper = (black + (1 - black) * d ** 2.2) ** (1 / 2.2)
-    lifts = np.linspace(0, paper[0], 1001)[:, None]
-    error = np.abs(lifts + (1 - lifts) * d - paper).max(axis=1)
-    return lifts[error.argmin(), 0]
+def matte_values(matte):
+    """Paper black in linear light and the tint, as matteValues()."""
+    black = (matte * PAPER_BLACK ** (1 / 2.2)) ** 2.2
+    return black, np.array([1, 1 - 0.015 * matte, 1 - 0.045 * matte])
 
 
-def matte_level(lift):
-    """Overall level that keeps mid grey, as matteLevel()."""
-    return MID_GREY / (lift + (1 - lift) * MID_GREY)
+def matte_curve(b, black):
+    """Paper black added in linear light, as PRINT_SHADER."""
+    return (black + (1 - black) * np.maximum(b, 0) ** 2.2) ** (1 / 2.2)
 
 
 def sample(table, x, y):
@@ -194,6 +188,9 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
         b = ink_spread(b, tiled(texdir / "ink.png", w, h), ink)
     if print_colors > 0:
         b = print_lut(b, LUT, print_colors)
+    black, tint = matte_values(matte)
+    if matte > 0:
+        b = matte_curve(b, black)
     ds, dl = relief(texdir / "detail.png", w, h)
     ts, tl = relief(texdir / "tone.png", w, h, TONE_SCALE)
     shadow = 1 - (1 - ds) * (1 - ts) * (1 - grain * gs)
@@ -201,23 +198,13 @@ def composite(base, texdir, intensity, balance=0.4, matte=0.0, brightness=1.0,
     ms, ml = relief(texdir / "tone.png", w, h, MOTTLE_STRETCH)
     cloud = (mottle * (0.5 + 0.5 * (ml - ms)))[..., None]
 
-    flare = matte_lift(matte)
-    brightness = brightness * matte_level(flare)
+    # Multiply: shadows and the tint (1 without matte).
+    b = b * brightness * tint * (1 - intensity * shadow)[..., None]
 
-    # Multiply: paper light and shadows. The overlay leaves out a tint too
-    # faint to see, the print effect always has it.
-    paper = brightness * np.ones(3)
-    if matte >= TINT_MIN_MATTE or print_colors > 0 or ink > 0:
-        paper *= np.array([1, 1 - 0.04 * matte, 1 - 0.12 * matte])
-    b = b * paper * (1 - intensity * shadow)[..., None]
-
-    # OVER: highlights over ink mottle over the light paper reflects
-    # from black.
+    # OVER: highlights over ink mottle.
     hl = (intensity * balance * light)[..., None]
-    color = np.array([1, 0.97, 0.92]) * flare
-    c = hl + (cloud + color * (1 - cloud)) * (1 - hl)
-    a = hl + (cloud + flare * (1 - cloud)) * (1 - hl)
-    b = b * (1 - a) + c * brightness
+    a = hl + cloud * (1 - hl)
+    b = b * (1 - a) + a * brightness
     return Image.fromarray((np.clip(b, 0, 1) * 255 + 0.5).astype(np.uint8))
 
 

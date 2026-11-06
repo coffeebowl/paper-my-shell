@@ -114,7 +114,7 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage({
             title: _('Paper'),
             icon_name: 'x-office-document-symbolic',
-            description: _('These effects share two light passes over each monitor, drawn only on frames that change anyway. The first one you turn on costs a little, the others then add nothing measurable. A still screen costs nothing. While an effect from the Print page is on, the paper is drawn in its pass and costs nothing extra.'),
+            description: _('These effects share one light pass over each monitor, drawn only on frames that change anyway. The first one you turn on costs a little, the others then add nothing measurable. A still screen costs nothing. While an effect from the Print page is on, the paper is drawn in its pass and costs nothing extra.'),
         });
 
         const general = new Adw.PreferencesGroup();
@@ -173,11 +173,9 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         syncTrueSize();
         page.add(textureGroup);
 
-        page.add(featureGroup(settings, 'matte-enabled', _('Matte'),
-            _('The contrast of print instead of a screen: blacks lift like ink on paper, whites get dimmer and slightly warmer. Overall brightness stays the same.'), [
-                percentRow(settings, 'matte', 50, _('Amount'), ''),
-                percentRow(settings, 'mottle', 20, _('Ink mottle'),
-                    _('Ink soaks in unevenly and lightens dark areas in soft patches.')),
+        page.add(featureGroup(settings, 'mottle-enabled', _('Ink mottle'),
+            _('Ink soaks in unevenly and lightens dark areas in soft patches.'), [
+                percentRow(settings, 'mottle', 20, _('Amount'), ''),
             ]));
 
         page.add(featureGroup(settings, 'brightness-enabled', _('Brightness'),
@@ -191,6 +189,10 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
             icon_name: 'printer-symbolic',
             description: _('These effects need the finished picture, so the screen is rendered offscreen first. Small changes like a blinking cursor cost little, big ones like scrolling a whole window cost more GPU time than the paper effects alone. That is paid once: with one effect on, the other adds little, and the paper effects are drawn in the same pass for free. A still screen costs nothing.'),
         });
+        print.add(featureGroup(settings, 'paper-black-enabled', _('Matte'),
+            _('The blacks of print instead of a screen: even the darkest ink reflects some light, so shadows lift while midtones and white stay. White gets slightly warmer. 100 % is the black of uncoated paper.'), [
+                percentRow(settings, 'paper-black', 100, _('Amount'), ''),
+            ]));
         print.add(featureGroup(settings, 'print-colors-enabled', _('Print colours (experimental)'),
             _('Only colours offset print on uncoated paper can reach: calmer blues and greens, strong reds and yellows.'), [
                 percentRow(settings, 'print-colors', 100, _('Amount'), ''),

@@ -47,30 +47,26 @@ What makes a screen read as emissive rather than reflective:
 - deep blacks (paper always scatters some light back),
 - cool, neutral white (paper and room light are warmer).
 
-The matte setting handles all three. Paper's darkest ink still reflects a
-few percent of the light (about 5 % on uncoated paper). That light adds up
-in linear light, so in screen values `(b + (1 − b) · d^2.2)^(1/2.2)`:
-shadows lift a lot, midtones little. Only dimming and warming the white
-with a tiny flare reads as a colour filter, not as paper.
+The matte setting handles the last two. Paper's darkest ink still reflects
+a few percent of the light (about 5 % on uncoated paper). That light adds
+up in linear light, so in screen values `(b + (1 − b) · d^2.2)^(1/2.2)`:
+shadows lift a lot, midtones little, white not at all. Only dimming and
+warming the white with a tiny flare reads as a colour filter, not as
+paper.
 
 Blending can't apply that curve. Each pass maps `dst` along a straight
-line (`src · dst` or `src + dst · (1 − a)`), and the only curved factor,
-`DST_COLOR` on both sides, gives `dst²` at a fixed weight that is far too
-strong. Correcting it needs extra passes that band in 8 bits. So the OVER
-pass lifts black along the straight line closest to the paper curve
-(least maximum error). Midtones come out up to 16 levels too light at the
-maximum, about 6 at the default. The exact curve would need the finished
-pixels, like print colours, which costs a full repaint on every change.
+line (`src · dst` or `src + dst · (1 − a)`), and passes in a row stay a
+straight line. An earlier version lifted black along the line closest to
+the curve and dimmed white to keep mid grey; that lifted midtones and
+colours too and looked washed out and grey. So the matte look needs the
+finished pixels and runs in the offscreen pass of print colours, with the
+exact curve. The lift is even in screen values along the slider, up to
+the black of uncoated paper (a screen value of 65).
 
-Lifting black alone made the whole screen lighter. So the curve is scaled
-until 18 % grey (L* 50) keeps its value: at the maximum black goes to 40,
-white down to 208, mid grey stays at 117. That also covers the first
-point, paper white doesn't glow. The scale is applied as an overall
-brightness factor on both passes.
-
-The multiply also warms the white a little. There is no light falloff
-across the screen: it is still a monitor, and the illusion shouldn't fight
-that.
+White isn't dimmed: the eye adapts to the brightest white anyway, the
+brightness setting is there for a dimmer screen. Matte warms the white a
+little. There is no light falloff across the screen: it is still a
+monitor, and the illusion shouldn't fight that.
 
 ## Grain, mottle, ink spread, true size
 

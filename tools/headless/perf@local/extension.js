@@ -107,12 +107,16 @@ async function measure(label, animate) {
         `GPU ms/s ${((g1 - g0) / 1e6 / secs).toFixed(1)}`);
 }
 
+// Every config sets every switch: they carry over from the one before.
+const FEATURES = ['paper-black-enabled', 'print-colors-enabled', 'ink-spread-enabled'];
+const config = (...on) => ({enabled: true, ...Object.fromEntries(FEATURES.map(k => [k, on.includes(k)]))});
 const CONFIGS = [
     ['off', {'enabled': false}],
-    ['overlay', {'enabled': true, 'print-colors-enabled': false, 'ink-spread-enabled': false}],
-    ['overlay+print', {'enabled': true, 'print-colors-enabled': true, 'ink-spread-enabled': false}],
-    ['overlay+ink', {'enabled': true, 'print-colors-enabled': false, 'ink-spread-enabled': true}],
-    ['overlay+print+ink', {'enabled': true, 'print-colors-enabled': true, 'ink-spread-enabled': true}],
+    ['overlay', config()],
+    ['overlay+matte', config('paper-black-enabled')],
+    ['overlay+print', config('print-colors-enabled')],
+    ['overlay+ink', config('ink-spread-enabled')],
+    ['overlay+print+ink', config('print-colors-enabled', 'ink-spread-enabled')],
 ];
 
 // Fractional scaling changes the costs a lot: PAPER_SCALE sets the scale

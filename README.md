@@ -22,12 +22,13 @@ the settings schema and are shown in the preferences.
   cardboard and canvas.
 - **True size**: the grain keeps its size in millimetres on every monitor,
   from the size the monitor reports.
-- **Matte**: the contrast of print instead of a screen. Even the darkest
-  ink reflects some light, so blacks lift and turn to charcoal at the
-  maximum, as on uncoated paper. Whites drop and get a touch warmer, so
-  mid grey and the overall brightness stay the same. Ink mottle lightens
-  dark areas in soft patches, where ink soaked in unevenly.
+- **Ink mottle**: lightens dark areas in soft patches, where ink soaked in
+  unevenly.
 - **Brightness**: dims the whole screen.
+- **Matte**: the blacks of print instead of a screen. Even the darkest ink
+  reflects some light, so shadows lift and turn to charcoal at the
+  maximum, as on uncoated paper, while midtones and white stay. White
+  gets a touch warmer.
 - **Print colours** (experimental): limits colours to what offset print on
   uncoated paper can reach. Blues, violets and bright greens get much
   calmer, reds and yellows stay strong, greys don't change.
@@ -105,13 +106,12 @@ Each texture is four seamless tiles, uploaded once and tiled by the GPU
 Laid paper and canvas are regular patterns with a period of whole pixels.
 Scaled by a fraction they would shimmer, so true size is off for them.
 
-Texture, matte and brightness are one full-screen pass per monitor, a
+Texture, mottle and brightness are one full-screen pass per monitor, a
 single quad with a small shader whose blend does the multiply and the OVER
-at once. A stronger matte look tints white per colour channel, which one
-blend can't do, so it splits into two passes (multiply, then OVER). All
-settings are uniforms, so changing them never rebuilds anything.
+at once. All settings are uniforms, so changing them never rebuilds
+anything.
 
-Print colours and ink spread need the finished pixels, so the UI is
+The matte look, print colours and ink spread need the finished pixels, so the UI is
 rendered offscreen and one shader does them and the paper in a single pass
 instead of the overlay. Each monitor keeps its offscreen copy between
 frames, and a frame only repaints the part of it that changed, so a small

@@ -48,15 +48,9 @@
       <description>Uses the size the monitor reports, so paper grain is equally large on every screen. Monitors without a size keep one texel per logical pixel.</description>
     </key>
 
-    <key name="matte-enabled" type="b">
+    <key name="mottle-enabled" type="b">
       <default>true</default>
-      <summary>Apply the matte look</summary>
-    </key>
-    <key name="matte" type="d">
-      <range min="0.0" max="0.5"/>
-      <default>0.02</default>
-      <summary>Matte amount</summary>
-      <description>Gives the screen the contrast of print: blacks lift like ink on paper, whites get dimmer and slightly warmer, mid grey stays. The maximum matches uncoated paper.</description>
+      <summary>Show ink mottle</summary>
     </key>
     <key name="mottle" type="d">
       <range min="0.0" max="0.2"/>
@@ -74,6 +68,19 @@
       <default>0.9</default>
       <summary>Screen brightness</summary>
       <description>Dims the whole screen while the extension runs.</description>
+    </key>
+
+    <!-- The matte look. Replaces the keys matte-enabled and matte, which
+         lifted along a straight line on another scale. -->
+    <key name="paper-black-enabled" type="b">
+      <default>false</default>
+      <summary>Apply the matte look</summary>
+    </key>
+    <key name="paper-black" type="d">
+      <range min="0.0" max="1.0"/>
+      <default>0.2</default>
+      <summary>Matte amount</summary>
+      <description>Gives the screen the blacks of print: even the darkest ink reflects some light, so shadows lift while midtones and white stay. White gets slightly warmer. 1 is the black of uncoated paper. Renders the screen offscreen first, so changes on screen cost more GPU time.</description>
     </key>
 
     <key name="print-colors-enabled" type="b">
@@ -95,7 +102,7 @@
       <range min="0.0" max="1.0"/>
       <default>0.4</default>
       <summary>Ink spread</summary>
-      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Shares the offscreen rendering with print colours.</description>
+      <description>Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. Shares the offscreen rendering with the matte look and print colours.</description>
     </key>
 
     <key name="shift-texture" type="b">

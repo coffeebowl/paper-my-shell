@@ -72,23 +72,14 @@ const SETTLE_DELAY = 100;
 // one full repaint costs less and starts over clean.
 const RING_MAX_RECTS = 256;
 
-// Schema maximum of the matte key.
-const MATTE_MAX = 0.5;
-
-// The darkest ink on uncoated paper still reflects about 5 % of the light.
-// The maximum matte reaches that.
-const PAPER_BLACK = 0.05 / MATTE_MAX;
-
-// Screen value of 18 % grey (L* 50), which keeps its brightness under the
-// matte look.
-const MID_GREY = 0.46;
-
-const FIT_SAMPLES = Array.from({length: 65}, (_, i) => i / 64);
+// The darkest ink on uncoated paper still reflects about 5 % of the light,
+// in a slightly warm colour. The full matte look lifts black to that.
+const PAPER_BLACK = [0.05, 0.05 * 0.97 ** 2.2, 0.05 * 0.92 ** 2.2];
 
 // Settings that only change values or visibility, not the textures.
 const SYNC_KEYS = [
     'texture-enabled', 'intensity', 'dark-balance', 'grain', 'true-size',
-    'matte-enabled', 'matte', 'mottle',
+    'mottle-enabled', 'mottle', 'paper-black-enabled', 'paper-black',
     'brightness-enabled', 'brightness',
     'print-colors-enabled', 'print-colors',
     'ink-spread-enabled', 'ink-spread',
@@ -99,8 +90,6 @@ const UNIFORMS = `
 uniform float u_intensity;
 uniform float u_balance;
 uniform float u_grain;
-uniform float u_matte;
-uniform float u_lift;
 uniform float u_mottle;
 uniform float u_brightness;
 uniform float u_tone_ratio;
@@ -133,30 +122,17 @@ float light = 1.0 - (1.0 - detail.r) * (1.0 - tone.r) * (1.0 - grain.r);
 `;
 }
 
-// The slightly warmer white of paper under room light, with the matte look.
-const PAPER_TINT = `
-vec3 tint = vec3(1.0, 1.0 - 0.04 * u_matte, 1.0 - 0.12 * u_matte);
-`;
-
-// Below this matte the tint changes white by less than one level (blue moves
-// most), so the overlay leaves it out and draws one pass instead of two.
-const TINT_MIN_MATTE = 1 / (255 * 0.12);
-
-// Multiplied with the screen: shadows of the relief, then the tint.
-// Brightness is a plain dimming factor on top.
+// Multiplied with the screen: shadows of the relief. Brightness is a plain
+// dimming factor on top.
 const PAPER_SHADE = `
 float shade = u_brightness * (1.0 - u_intensity * shadow);
 `;
-const PAPER_MULTIPLY = `${PAPER_TINT}${PAPER_SHADE}
-vec3 multiply = shade * tint;
-`;
 
 /**
- * GLSL composited OVER the screen: relief highlights, over uneven ink
+ * GLSL composited OVER the screen: relief highlights over uneven ink
  * (mottle: ink soaks into the paper's cloudy formation unevenly, which
- * lightens dark areas in patches), over the light paper reflects even from
- * its darkest ink, which lifts blacks. Dimmed along with the rest so
- * nothing gets brighter than the dimmed white.
+ * lightens dark areas in patches). Dimmed along with the rest so nothing
+ * gets brighter than the dimmed white.
  *
  * @param {string} toneSampler
  * @returns {string}
@@ -166,36 +142,27 @@ function paperOverGlsl(toneSampler) {
 vec4 cloud = texture2D(${toneSampler}, uv * u_tone_ratio * ${(TONE_SCALE / MOTTLE_STRETCH).toFixed(1)});
 float mottle = u_mottle * (0.5 + cloud.r - 0.5 * cloud.a);
 float highlight = u_intensity * u_balance * light;
-vec4 over = vec4(vec3(highlight), highlight) +
-    (vec4(vec3(mottle), mottle) +
-     vec4(vec3(1.0, 0.97, 0.92) * u_lift, u_lift) * (1.0 - mottle)) * (1.0 - highlight);
+vec4 over = vec4(vec3(highlight), highlight) + vec4(vec3(mottle), mottle) * (1.0 - highlight);
 over.rgb *= u_brightness;
 `;
 }
 
-const OVERLAY_RELIEF = reliefGlsl('cogl_tex_coord0_in.st',
-    'cogl_sampler0', 'cogl_sampler1', 'cogl_sampler2');
 // Shade and OVER in one blend, dst * shade * (1 - over.a) + over.rgb: the
-// colour is over.rgb, the alpha 1 - shade * (1 - over.a). The tint is a
-// factor per channel and can't go into the alpha. A pass of its own costs
-// more than splitting the blend, so a visible tint takes the two passes.
-const ONE_PASS_SHADER = `${OVERLAY_RELIEF}${PAPER_SHADE}${paperOverGlsl('cogl_sampler1')}
+// colour is over.rgb, the alpha 1 - shade * (1 - over.a).
+const OVERLAY_SHADER = `${reliefGlsl('cogl_tex_coord0_in.st',
+    'cogl_sampler0', 'cogl_sampler1', 'cogl_sampler2')}${PAPER_SHADE}${paperOverGlsl('cogl_sampler1')}
 cogl_color_out = vec4(over.rgb, 1.0 - shade * (1.0 - over.a));
 `;
-const MULTIPLY_SHADER = `${OVERLAY_RELIEF}${PAPER_MULTIPLY}
-cogl_color_out = vec4(multiply, 1.0);
-`;
-const OVER_SHADER = `${OVERLAY_RELIEF}${paperOverGlsl('cogl_sampler1')}
-cogl_color_out = over;
-`;
 
-// Print colours and ink spread need the finished pixels, so the UI is
-// rendered offscreen first. The paper is then applied in the same pass
-// instead of the overlay. Drawn per monitor: u_origin and u_extent are the
-// stage area of the offscreen copy, u_monitor the monitor's.
+// The matte look, print colours and ink spread need the finished pixels, so
+// the UI is rendered offscreen first. The paper is then applied in the same
+// pass instead of the overlay. Drawn per monitor: u_origin and u_extent are
+// the stage area of the offscreen copy, u_monitor the monitor's.
 const PRINT_UNIFORMS = `${UNIFORMS}
 uniform float u_print;
 uniform float u_ink;
+uniform vec3 u_paper_black;
+uniform vec3 u_tint;
 uniform vec2 u_origin;
 uniform vec2 u_extent;
 uniform vec2 u_texel;
@@ -296,48 +263,29 @@ if (u_ink > 0.0) {
 // table. Greys and colours print can reach stay untouched, greys skip it.
 if (u_print > 0.0 && max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b)) > 1.0 / 1024.0)
     c = mix(c, print_lut(c), u_print);
-${reliefGlsl('paper_uv', 'u_detail', 'u_tone', 'u_grain_tile')}${PAPER_MULTIPLY}${paperOverGlsl('u_tone')}
-c = c * multiply * (1.0 - over.a) + over.rgb;
+
+// Matte: even the darkest ink reflects some light, which adds up in linear
+// light. Shadows lift, midtones barely, white not at all.
+if (u_paper_black.r > 0.0)
+    c = pow(u_paper_black + (1.0 - u_paper_black) * pow(max(c, 0.0), vec3(2.2)), vec3(1.0 / 2.2));
+${reliefGlsl('paper_uv', 'u_detail', 'u_tone', 'u_grain_tile')}${PAPER_SHADE}${paperOverGlsl('u_tone')}
+c = c * shade * u_tint * (1.0 - over.a) + over.rgb;
 cogl_color_out = vec4(c * color.a, color.a);
 `;
 
 /**
- * How far the matte look lifts black, in screen values. Paper adds the
- * light it reflects from its darkest ink in linear light, which lifts
- * shadows a lot and midtones little. Blending can only map the screen
- * along a straight line, so this is the lift of the line closest to that.
+ * The matte look's uniforms. The black lift is even in screen values, so
+ * the slider feels linear, up to the black of uncoated paper. Paper white
+ * under room light is a little warmer than a screen's.
  *
- * @param {number} matte
- * @returns {number}
+ * @param {number} matte - 0..1
+ * @returns {object} paper_black (linear light) and tint
  */
-function matteLift(matte) {
-    const black = PAPER_BLACK * matte;
-    const paper = d => (black + (1 - black) * d ** 2.2) ** (1 / 2.2);
-    const error = lift => Math.max(...FIT_SAMPLES.map(d =>
-        Math.abs(lift + (1 - lift) * d - paper(d))));
-    // The error is convex in the lift, so narrow it down by thirds.
-    let [lo, hi] = [0, paper(0)];
-    for (let i = 0; i < 40; i++) {
-        const a = lo + (hi - lo) / 3;
-        const b = hi - (hi - lo) / 3;
-        if (error(a) < error(b))
-            hi = b;
-        else
-            lo = a;
-    }
-    return (lo + hi) / 2;
-}
-
-/**
- * Overall level of the matte look. Paper only reflects light, so its white
- * is dimmer than a screen's. Scaled so mid grey stays as it is: blacks
- * lift, whites drop, and the screen as a whole doesn't get lighter.
- *
- * @param {number} lift - from matteLift()
- * @returns {number}
- */
-function matteLevel(lift) {
-    return MID_GREY / (lift + (1 - lift) * MID_GREY);
+function matteValues(matte) {
+    return {
+        paper_black: PAPER_BLACK.map(b => (matte * b ** (1 / 2.2)) ** 2.2),
+        tint: [1, 1 - 0.015 * matte, 1 - 0.045 * matte],
+    };
 }
 
 /**
@@ -612,9 +560,9 @@ function roundingWidths(scale, ratio) {
 }
 
 /**
- * Ink spread, print colours and paper in one pass over an offscreen copy of
- * the UI, drawn back per monitor. Only attached while one of the first two
- * is on. The overlay is hidden then on the monitors it covers.
+ * Ink spread, print colours, matte and paper in one pass over an offscreen
+ * copy of the UI, drawn back per monitor. Only attached while one of the
+ * first three is on. The overlay is hidden then on the monitors it covers.
  *
  * Each monitor view keeps its copy between frames, and a frame only paints
  * its redraw clip into it, so partial redraws keep working: the window group
@@ -1320,9 +1268,8 @@ async function pixelSizes(cancellable) {
 }
 
 /**
- * Paints the paper over one monitor: shadows and paper light multiplied,
- * highlights and flare composited OVER, in one full-screen pass, or in two
- * when the tint of the matte look is visible. All settings are shader
+ * Paints the paper over one monitor: shadows multiplied, highlights and
+ * mottle composited OVER, in one full-screen pass. All settings are shader
  * uniforms, so changing them never rebuilds anything, and nothing animates,
  * so the surface never causes a redraw by itself.
  */
@@ -1331,26 +1278,18 @@ class PaperSurface extends Clutter.Actor {
     constructor(textures, params) {
         super(params);
         const ctx = global.stage.context.get_backend().get_cogl_context();
-        const over = 'RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))';
-        this._onePass = this._createPipeline(ctx, textures, ONE_PASS_SHADER, over);
-        this._multiply = this._createPipeline(ctx, textures, MULTIPLY_SHADER,
-            'RGBA = ADD(SRC_COLOR * (DST_COLOR), 0)');
-        this._over = this._createPipeline(ctx, textures, OVER_SHADER, over);
-        this._tileSize = textures.detailSize;
-        this._shift = [0, 0];
-        this._values = {intensity: 0, balance: 0, matte: 0, lift: 0, mottle: 0, brightness: 1};
-    }
-
-    _createPipeline(ctx, textures, shader, blend) {
         const pipeline = Cogl.Pipeline.new(ctx);
         [textures.detail, textures.tone, textures.grain].forEach((texture, layer) => {
             pipeline.set_layer_texture(layer, texture);
             pipeline.set_layer_wrap_mode(layer, Cogl.PipelineWrapMode.REPEAT);
         });
-        pipeline.add_snippet(Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, UNIFORMS, shader));
-        pipeline.set_blend(blend);
+        pipeline.add_snippet(Cogl.Snippet.new(Cogl.SnippetHook.FRAGMENT, UNIFORMS, OVERLAY_SHADER));
+        pipeline.set_blend('RGBA = ADD(SRC_COLOR, DST_COLOR * (1 - SRC_COLOR[A]))');
         setUniforms(pipeline, {tone_ratio: textures.toneRatio, grain_ratio: textures.grainRatio});
-        return pipeline;
+        this._pipeline = pipeline;
+        this._tileSize = textures.detailSize;
+        this._shift = [0, 0];
+        this._values = {intensity: 0, balance: 0, mottle: 0, brightness: 1};
     }
 
     /**
@@ -1363,8 +1302,7 @@ class PaperSurface extends Clutter.Actor {
         this._values = values;
         this._tileSize = tileSize;
         this._shift = shift;
-        for (const pipeline of [this._onePass, this._multiply, this._over])
-            setUniforms(pipeline, values);
+        setUniforms(this._pipeline, values);
         this.queue_redraw();
     }
 
@@ -1373,25 +1311,16 @@ class PaperSurface extends Clutter.Actor {
     }
 
     vfunc_paint_node(root, _paintContext) {
-        const {intensity, balance, matte, lift, mottle, brightness} = this._values;
+        const {intensity, mottle, brightness} = this._values;
+        if (intensity <= 0 && mottle <= 0 && brightness >= 1)
+            return;
         const [width, height] = this.get_size();
         const tiles = [width / this._tileSize, height / this._tileSize];
         const box = new Clutter.ActorBox({x1: 0, y1: 0, x2: width, y2: height});
-
-        const multiply = intensity > 0 || brightness < 1;
-        const over = intensity * balance > 0 || lift > 0 || mottle > 0;
-        let passes = [];
-        if (matte >= TINT_MIN_MATTE)
-            passes = [multiply && this._multiply, over && this._over].filter(Boolean);
-        else if (multiply || over)
-            passes = [this._onePass];
-
-        for (const pipeline of passes) {
-            const node = Clutter.PipelineNode.new(pipeline);
-            const [x, y] = this._shift;
-            node.add_texture_rectangle(box, x, y, x + tiles[0], y + tiles[1]);
-            root.add_child(node);
-        }
+        const node = Clutter.PipelineNode.new(this._pipeline);
+        const [x, y] = this._shift;
+        node.add_texture_rectangle(box, x, y, x + tiles[0], y + tiles[1]);
+        root.add_child(node);
     }
 });
 
@@ -1617,19 +1546,14 @@ class PaperOverlay {
             return;
 
         const s = this._settings;
-        const matteEnabled = s.get_boolean('matte-enabled');
-        const matte = matteEnabled ? this._double('matte') : 0;
-        const lift = matteLift(matte);
-        const brightness = s.get_boolean('brightness-enabled') ? this._double('brightness') : 1;
         const values = {
             intensity: s.get_boolean('texture-enabled') ? this._double('intensity') : 0,
             balance: this._double('dark-balance'),
             grain: this._double('grain'),
-            matte,
-            lift,
-            mottle: matteEnabled ? this._double('mottle') : 0,
-            brightness: brightness * matteLevel(lift),
+            mottle: s.get_boolean('mottle-enabled') ? this._double('mottle') : 0,
+            brightness: s.get_boolean('brightness-enabled') ? this._double('brightness') : 1,
         };
+        const matte = s.get_boolean('paper-black-enabled') ? this._double('paper-black') : 0;
         const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;
         const ink = s.get_boolean('ink-spread-enabled') ? this._double('ink-spread') : 0;
 
@@ -1646,13 +1570,14 @@ class PaperOverlay {
             .map(lm => lm.get_number()));
         const skipped = new Set(monitors
             .filter(m => fullscreen(m.index) || hdr.has(m.index)).map(m => m.index));
-        const printActive = (print > 0 || ink > 0) && monitors.some(m => !skipped.has(m.index));
+        const printActive = (matte > 0 || print > 0 || ink > 0) &&
+            monitors.some(m => !skipped.has(m.index));
         if (printActive) {
             if (!this._print) {
                 this._print = new PaperPrintEffect(this._textures);
                 Main.layoutManager.uiGroup.add_effect_with_name('paper-my-shell-print', this._print);
             }
-            this._print.setValues({...values, print, ink, shift: this._shiftTiles()},
+            this._print.setValues({...values, ...matteValues(matte), print, ink, shift: this._shiftTiles()},
                 monitors.map(m => this._tileSize(m.index)), skipped);
         } else {
             this._removePrint();
@@ -1726,8 +1651,8 @@ class PaperToggle extends QuickMenuToggle {
         // Useful intensities are small, a quadratic curve gives them room.
         this._addSlider('intensity', 'texture-enabled', {gicon}, _('Texture intensity'),
             v => v * v, value => Math.sqrt(value));
-        this._addSlider('matte', 'matte-enabled', {icon_name: 'display-brightness-symbolic'},
-            _('Matte'), v => v * MATTE_MAX, value => value / MATTE_MAX);
+        this._addSlider('paper-black', 'paper-black-enabled', {icon_name: 'display-brightness-symbolic'},
+            _('Matte'), v => v, value => value);
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 

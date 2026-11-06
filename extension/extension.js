@@ -11,12 +11,10 @@ import St from 'gi://St';
 
 import {Extension, gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {QuickMenuToggle, SystemIndicator} from 'resource:///org/gnome/shell/ui/quickSettings.js';
-import {Slider} from 'resource:///org/gnome/shell/ui/slider.js';
 
 import {TONE_SCALE, isPeriodic} from './papergen.js';
-import {textureLabel, textureNames} from './textures.js';
+import {textureLabel} from './textures.js';
 
 Gio._promisify(Gio.File.prototype, 'read_async');
 Gio._promisify(Gio.File.prototype, 'load_contents_async');
@@ -1436,19 +1434,13 @@ class PaperOverlay {
         this._sizesCancellable = null;
         this._shift = randomShift();
         this._locked = Main.sessionMode.isLocked;
-        // Values shown while a slider is dragged, before they are saved.
-        this._previews = new Map();
 
         settings.connectObject(
             'changed::enabled', () => this._rebuild(),
             'changed::texture', () => this._load(),
             this);
-        for (const key of SYNC_KEYS) {
-            settings.connectObject(`changed::${key}`, () => {
-                this._previews.delete(key);
-                this._sync();
-            }, this);
-        }
+        for (const key of SYNC_KEYS)
+            settings.connectObject(`changed::${key}`, () => this._sync(), this);
         Main.layoutManager.connectObject('monitors-changed', () => {
             this._loadPixelSizes();
             this._rebuild();
@@ -1615,39 +1607,23 @@ class PaperOverlay {
         this._sync();
     }
 
-    /**
-     * Show a value without saving it, e.g. while a slider is dragged. The
-     * next change of the setting replaces it.
-     *
-     * @param {string} key
-     * @param {number} value
-     */
-    preview(key, value) {
-        this._previews.set(key, value);
-        this._sync();
-    }
-
-    _double(key) {
-        return this._previews.get(key) ?? this._settings.get_double(key);
-    }
-
     _sync() {
         if (!this._settings.get_boolean('enabled') || !this._textures)
             return;
 
         const s = this._settings;
         const values = {
-            intensity: s.get_boolean('texture-enabled') ? this._double('intensity') : 0,
-            balance: this._double('dark-balance'),
-            grain: this._double('grain'),
-            mottle: s.get_boolean('mottle-enabled') ? this._double('mottle') : 0,
-            brightness: s.get_boolean('brightness-enabled') ? this._double('brightness') : 1,
+            intensity: s.get_boolean('texture-enabled') ? s.get_double('intensity') : 0,
+            balance: s.get_double('dark-balance'),
+            grain: s.get_double('grain'),
+            mottle: s.get_boolean('mottle-enabled') ? s.get_double('mottle') : 0,
+            brightness: s.get_boolean('brightness-enabled') ? s.get_double('brightness') : 1,
         };
-        const matte = s.get_boolean('paper-black-enabled') ? this._double('paper-black') : 0;
-        const print = s.get_boolean('print-colors-enabled') ? this._double('print-colors') : 0;
-        const ink = s.get_boolean('ink-spread-enabled') ? this._double('ink-spread') : 0;
+        const matte = s.get_boolean('paper-black-enabled') ? s.get_double('paper-black') : 0;
+        const print = s.get_boolean('print-colors-enabled') ? s.get_double('print-colors') : 0;
+        const ink = s.get_boolean('ink-spread-enabled') ? s.get_double('ink-spread') : 0;
         const scatter = s.get_boolean('light-scatter-enabled')
-            ? this._double('light-scatter') * SCATTER_MAX_MM : 0;
+            ? s.get_double('light-scatter') * SCATTER_MAX_MM : 0;
 
         // A covered fullscreen window can't be scanned out directly.
         const monitors = Main.layoutManager.monitors;
@@ -1726,9 +1702,13 @@ class PaperOverlay {
     }
 }
 
+/**
+ * On and off for everything, the selected paper as subtitle, and the way
+ * to the preferences. Everything else lives there.
+ */
 const PaperToggle = GObject.registerClass(
 class PaperToggle extends QuickMenuToggle {
-    _init(extension, settings, overlay) {
+    _init(extension, settings) {
         const gicon = Gio.FileIcon.new(
             extension.dir.resolve_relative_path('icons/paper-symbolic.svg'));
         super._init({
@@ -1736,91 +1716,23 @@ class PaperToggle extends QuickMenuToggle {
             gicon,
             toggleMode: true,
         });
-        this._settings = settings;
-        this._overlay = overlay;
         settings.bind('enabled', this, 'checked', Gio.SettingsBindFlags.DEFAULT);
         this.connect('destroy', () => Gio.Settings.unbind(this, 'checked'));
 
-        this.menu.setHeader(gicon, _('Paper Texture'));
-
-        // Useful intensities are small, a quadratic curve gives them room.
-        this._addSlider('intensity', 'texture-enabled', {gicon}, _('Texture intensity'),
-            v => v * v, value => Math.sqrt(value));
-        this._addSlider('paper-black', 'paper-black-enabled', {icon_name: 'display-brightness-symbolic'},
-            _('Matte'), v => v, value => value);
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        this._textureItems = new Map();
-        for (const name of textureNames(settings)) {
-            const item = new PopupMenu.PopupMenuItem(textureLabel(name));
-            item.connect('activate', () => settings.set_string('texture', name));
-            this.menu.addMenuItem(item);
-            this._textureItems.set(name, item);
-        }
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.setHeader(gicon, _('Paper my Shell'));
         this.menu.addAction(_('Settings'), () => extension.openPreferences());
 
-        settings.connectObject(
-            'changed::texture', () => this._syncTexture(), this);
-        this._syncTexture();
-    }
-
-    _addSlider(key, enabledKey, iconParams, accessibleName, toValue, toSlider) {
-        const settings = this._settings;
-        const slider = new Slider(toSlider(settings.get_double(key)));
-        slider.x_expand = true;
-        slider.accessible_name = accessibleName;
-        const save = () => {
-            const value = toValue(slider.value);
-            if (Math.abs(value - settings.get_double(key)) > 1e-6)
-                settings.set_double(key, value);
-        };
-        // While dragging only show the value, dconf gets the final one.
-        // Keyboard and scroll changes are single steps and saved directly.
-        let dragging = false;
-        slider.connect('drag-begin', () => (dragging = true));
-        slider.connect('drag-end', () => {
-            dragging = false;
-            save();
-        });
-        slider.connect('notify::value', () => {
-            if (dragging)
-                this._overlay.preview(key, toValue(slider.value));
-            else
-                save();
-        });
-        settings.connectObject(`changed::${key}`, () => {
-            const position = toSlider(settings.get_double(key));
-            if (Math.abs(position - slider.value) > 1e-6)
-                slider.value = position;
-        }, this);
-
-        const item = new PopupMenu.PopupBaseMenuItem({activate: false});
-        item.add_child(new St.Icon({style_class: 'popup-menu-icon', ...iconParams}));
-        item.add_child(slider);
-        this.menu.addMenuItem(item);
-
-        // Only offer the slider while its feature is switched on.
-        const syncVisible = () => (item.visible = settings.get_boolean(enabledKey));
-        settings.connectObject(`changed::${enabledKey}`, syncVisible, this);
-        syncVisible();
-    }
-
-    _syncTexture() {
-        const current = this._settings.get_string('texture');
-        this.subtitle = textureLabel(current);
-        for (const [name, item] of this._textureItems)
-            item.setOrnament(name === current ? PopupMenu.Ornament.DOT : PopupMenu.Ornament.NO_DOT);
+        const syncTexture = () => (this.subtitle = textureLabel(settings.get_string('texture')));
+        settings.connectObject('changed::texture', syncTexture, this);
+        syncTexture();
     }
 });
 
 const PaperIndicator = GObject.registerClass(
 class PaperIndicator extends SystemIndicator {
-    _init(extension, settings, overlay) {
+    _init(extension, settings) {
         super._init();
-        this.quickSettingsItems.push(new PaperToggle(extension, settings, overlay));
+        this.quickSettingsItems.push(new PaperToggle(extension, settings));
 
         // The extension keeps running on the lock screen so the paper stays,
         // but settings are not for whoever stands at the locked machine.
@@ -1841,7 +1753,7 @@ export default class PaperMyShellExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
         this._overlay = new PaperOverlay(this._settings, this);
-        this._indicator = new PaperIndicator(this, this._settings, this._overlay);
+        this._indicator = new PaperIndicator(this, this._settings);
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
     }
 

@@ -88,9 +88,9 @@ rm -r ~/.cache/paper-my-shell@coffeebowl
 
 ## Usage
 
-The **Paper** toggle in Quick Settings turns everything on and off. Its
-menu has the texture, its intensity and the matte amount. Everything else
-is in the preferences (Extensions app, or **Settings** in that menu).
+The **Paper** toggle in Quick Settings turns everything on and off and
+shows the selected paper. Everything else is in the preferences
+(Extensions app, or **Settings** in the toggle's menu).
 
 ## How it works
 

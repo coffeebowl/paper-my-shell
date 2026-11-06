@@ -2,7 +2,6 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import {Slider} from 'resource:///org/gnome/shell/ui/slider.js';
 
 const OUT = GLib.getenv('PAPER_TEST_OUT');
 const UUID = GLib.getenv('PAPER_TEST_UUID');
@@ -59,19 +58,9 @@ async function run() {
     await wait(1000);
     await shot('menu');
 
-    // Dragging a slider only previews, the value is saved on release.
-    const settings = extension.stateObj._settings;
-    const slider = toggle.menu._getMenuItems()
-        .flatMap(item => item.get_children())
-        .find(child => child instanceof Slider);
-    const before = settings.get_double('intensity');
-    slider.emit('drag-begin');
-    slider.value = 0.5;
-    const during = settings.get_double('intensity');
-    slider.emit('drag-end');
-    const after = settings.get_double('intensity');
-    console.log(`PAPERTEST slider intensity before=${before} during=${during} after=${after}`);
-    settings.reset('intensity');
+    // Only the way to the preferences is left in the menu.
+    const items = toggle.menu._getMenuItems().map(item => item.label?.text ?? item.constructor.name);
+    console.log(`PAPERTEST menu items=${JSON.stringify(items)} subtitle=${toggle.subtitle}`);
     quickSettings.menu.close({animate: false});
 
     extension.stateObj.openPreferences();

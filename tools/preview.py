@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Composite a paper texture over a screenshot (or a test card).
 
-Mirrors the shaders in extension.js: ink spread, print colours, light
+Mirrors the shaders in shaders.js: ink spread, print colours, light
 scattering and the matte look, then a multiply for shadows and the tint,
 then an OVER for highlights and ink mottle (in one blend on the GPU).
 """
@@ -17,7 +17,7 @@ from printgamut import oklab_to_srgb, srgb_to_oklab
 GAMUT = Path(__file__).resolve().parent / "print-gamut.png"
 LUT = Path(__file__).resolve().parent.parent / "extension" / "print-lut.png"
 
-# As in papergen.js and extension.js.
+# As in papergen.js and shaders.js.
 TONE_SCALE = 8
 PAPER_BLACK = 0.05 * np.array([1, 0.97, 0.92]) ** 2.2
 MOTTLE_STRETCH = 2

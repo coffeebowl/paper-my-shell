@@ -7,6 +7,9 @@ pack: $(UUID).shell-extension.zip
 
 $(UUID).shell-extension.zip: $(shell find extension -type f ! -name gschemas.compiled)
 	gnome-extensions pack extension --force \
+		--extra-source=overlay.js --extra-source=printEffect.js \
+		--extra-source=shaders.js --extra-source=regions.js \
+		--extra-source=textureCache.js --extra-source=quickSettings.js \
 		--extra-source=papergen.js --extra-source=generate.js \
 		--extra-source=textures.js --extra-source=print-lut.png --extra-source=icons
 

@@ -113,9 +113,15 @@ rebuilds anything.
 
 ## Development
 
-- `extension/`: the extension as it is packed. `extension.js` has the
-  shaders and the overlay, `prefs.js` the preferences, `papergen.js` the
-  texture generator, `generate.js` writes its tiles as PNGs.
+- `extension/`: the extension as it is packed.
+  - In the shell: `extension.js` enables and disables, `overlay.js` puts
+    the paper on screen, `printEffect.js` renders the print effects,
+    `shaders.js` has the shaders, `regions.js` the redraw region maths,
+    `textureCache.js` generates and loads textures, `quickSettings.js`
+    the toggle.
+  - `prefs.js`: the preferences.
+  - `papergen.js`: the texture generator, `generate.js` writes its tiles
+    as PNGs, `textures.js` names the textures.
 - `extension/schemas/`: settings, defaults, ranges and the list of
   textures.
 - `tools/preview.py`: the shaders in numpy, for previews over a test card

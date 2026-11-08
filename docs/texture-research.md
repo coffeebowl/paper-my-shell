@@ -210,7 +210,7 @@ maps them into the print gamut in OKLab:
   OKLab, hardly different.
 
 The paper is computed in the same shader while the effect is on, which
-saves the overlay passes. It is drawn per monitor like the overlay.
+saves the overlay pass. It is drawn per monitor like the overlay.
 
 Pitfall: offscreen effects and partial redraws. A `ClutterOffscreenEffect`
 clears its copy and re-renders it on every frame, but on a partial redraw

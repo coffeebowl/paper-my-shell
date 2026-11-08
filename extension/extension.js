@@ -1186,7 +1186,6 @@ class PaperPrintEffect extends Clutter.Effect {
         this._pendingRedraws = [];
     }
 
-    // Forget the copies of views that are gone.
     _pruneCopies() {
         const framebuffers = global.stage.peek_stage_views().map(v => v.get_framebuffer());
         for (const fb of this._copies.keys()) {
@@ -1343,7 +1342,8 @@ function randomShift() {
 
 /**
  * Physical size of a logical pixel in mm per monitor index, for the
- * monitors that report their size (EDID, via Mutter's DisplayConfig).
+ * monitors that report their size (EDID, via Mutter's DisplayConfig;
+ * Meta.Monitor doesn't expose it to GJS).
  *
  * @param {Gio.Cancellable} cancellable
  * @returns {Promise<Map<number, number>>}
@@ -1430,12 +1430,8 @@ class PaperSurface extends Clutter.Actor {
 });
 
 /**
- * One PaperSurface per monitor on top of the shell UI.
- *
- * Two texture layers keep the tiling invisible: the fine detail tile
- * repeats every 1024 px, which the eye can't spot in random grain. The
- * low-frequency tone would give the repetition away, so it is a separate
- * small tile stretched 8x that only repeats every few thousand pixels.
+ * One PaperSurface per monitor, and PaperPrintEffect while a print effect
+ * is on.
  */
 class PaperOverlay {
     constructor(settings, extension) {
@@ -1795,9 +1791,8 @@ export default class PaperMyShellExtension extends Extension {
         Main.panel.statusArea.quickSettings.addExternalIndicator(this._indicator);
     }
 
-    // The paper stays on the lock screen, so locking doesn't change how the
-    // screen looks, with the settings hidden there (PaperIndicator). Hence
-    // the unlock-dialog session mode.
+    // unlock-dialog keeps the paper on the lock screen; otherwise every lock
+    // and unlock would rebuild it. The settings are hidden while locked.
     disable() {
         this._indicator.destroy();
         this._indicator = null;

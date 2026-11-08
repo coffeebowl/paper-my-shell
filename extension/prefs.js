@@ -115,11 +115,16 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage({
             title: _('Paper'),
             icon_name: 'x-office-document-symbolic',
-            description: _('These effects share one light pass over each monitor, drawn only on frames that change anyway. The first one you turn on costs a little, the others then add nothing measurable. A still screen costs nothing. While an effect from the Print page is on, the paper is drawn in its pass and costs nothing extra.'),
+            description: _('These effects share one light pass over each monitor, drawn only on ' +
+                'frames that change anyway. The first one you turn on costs a little, the others ' +
+                'then add nothing measurable. A still screen costs nothing. While an effect from ' +
+                'the Print page is on, the paper is drawn in its pass and costs nothing extra.'),
         });
 
         const general = new Adw.PreferencesGroup({
-            description: _('Most effects are subtle on purpose and change dark and light areas by only a few levels. On screens with low contrast, or with blacks or whites cut off by their settings, they may need higher values to show.'),
+            description: _('Most effects are subtle on purpose and change dark and light areas ' +
+                'by only a few levels. On screens with low contrast, or with blacks or whites ' +
+                'cut off by their settings, they may need higher values to show.'),
         });
         const enabledRow = new Adw.SwitchRow({
             title: _('Enabled'),
@@ -190,10 +195,18 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
         const print = new Adw.PreferencesPage({
             title: _('Print'),
             icon_name: 'printer-symbolic',
-            description: _('These effects need the finished picture, so the screen is rendered offscreen first and the paper effects are drawn in the same pass. Small changes like a blinking cursor cost about as much as without them. The matte look and print colours cost no more than the paper effects alone. Ink spread and light scattering read neighbouring pixels, so big changes like scrolling a whole window cost more GPU time; together they read them only once. On battery, turning those two off saves the most. A still screen costs nothing.'),
+            description: _('These effects need the finished picture, so the screen is rendered ' +
+                'offscreen first and the paper effects are drawn in the same pass. Small changes ' +
+                'like a blinking cursor cost about as much as without them. The matte look and ' +
+                'print colours cost no more than the paper effects alone. Ink spread and light ' +
+                'scattering read neighbouring pixels, so big changes like scrolling a whole ' +
+                'window cost more GPU time; together they read them only once. On battery, ' +
+                'turning those two off saves the most. A still screen costs nothing.'),
         });
         print.add(featureGroup(settings, 'paper-black-enabled', _('Matte'),
-            _('The blacks of print instead of a screen: even the darkest ink reflects some light, so shadows lift while midtones and white stay. White gets slightly warmer. 100 % is the black of uncoated paper.'), [
+            _('The blacks of print instead of a screen: even the darkest ink reflects some ' +
+                'light, so shadows lift while midtones and white stay. White gets slightly ' +
+                'warmer. 100 % is the black of uncoated paper.'), [
                 percentRow(settings, 'paper-black', 100, _('Amount'), ''),
             ]));
         print.add(featureGroup(settings, 'print-colors-enabled', _('Print colours'),
@@ -201,11 +214,17 @@ export default class PaperMyShellPreferences extends ExtensionPreferences {
                 percentRow(settings, 'print-colors', 100, _('Amount'), ''),
             ]));
         print.add(featureGroup(settings, 'ink-spread-enabled', _('Ink spread (more GPU time)'),
-            _('Dark strokes grow a little where the paper takes ink, with ragged edges, and creep along fibres in short feathers, like ink on absorbent paper. On some OLED panels whose subpixels are not laid out in plain RGB stripes, the ragged edges can look worse. Looks best at a display scale of 125 % or more, where strokes are wider than the edge.'), [
+            _('Dark strokes grow a little where the paper takes ink, with ragged edges, and ' +
+                'creep along fibres in short feathers, like ink on absorbent paper. On some OLED ' +
+                'panels whose subpixels are not laid out in plain RGB stripes, the ragged edges ' +
+                'can look worse. Looks best at a display scale of 125 % or more, where strokes ' +
+                'are wider than the edge.'), [
                 percentRow(settings, 'ink-spread', 100, _('Amount'), ''),
             ]));
         print.add(featureGroup(settings, 'light-scatter-enabled', _('Light scattering (more GPU time)'),
-            _('Light that enters the paper next to ink scatters under it: dark strokes get a faint soft halo, light text on dark surfaces gets a little thinner. 100 % is the most absorbent uncoated paper, sized in millimetres for each monitor.'), [
+            _('Light that enters the paper next to ink scatters under it: dark strokes get a ' +
+                'faint soft halo, light text on dark surfaces gets a little thinner. 100 % is ' +
+                'the most absorbent uncoated paper, sized in millimetres for each monitor.'), [
                 percentRow(settings, 'light-scatter', 100, _('Amount'), ''),
             ]));
         window.add(print);

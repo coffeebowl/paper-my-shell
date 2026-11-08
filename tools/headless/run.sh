@@ -1,13 +1,15 @@
 #!/bin/bash
 # Run the extension in an isolated headless GNOME Shell, next to a helper
-# extension that takes screenshots (check) or measures frame costs (perf).
-# Settings, data and generated textures live in a temporary directory, the
-# running session is not touched. The virtual monitor renders on the real GPU.
+# extension that takes screenshots (check), checks partial redraws (verify)
+# or measures frame costs (perf). Settings, data and generated textures live
+# in a temporary directory, the running session is not touched. The virtual
+# monitor renders on the real GPU.
 #
-# Usage: run.sh check|perf OUTDIR [WxH[,WxH...]] [key=value ...]
+# Usage: run.sh check|verify|perf OUTDIR [WxH[,WxH...]] [key=value ...]
 #   Several sizes give several virtual monitors.
 #   key=value pairs go into the extension's settings, e.g. intensity=0.1
 #   BG=#rrggbb sets a solid desktop colour (default #f5f5f5).
+#   TIMEOUT=seconds before the shell is stopped (default 60).
 
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)

@@ -18,6 +18,8 @@ lock screen. Nothing animates, so a still screen costs nothing.
 - Seven papers: recycled, drawing, watercolor, washi, laid paper,
   cardboard and canvas.
 - The grain keeps its size in millimetres on every monitor.
+- Ink mottle. Dark areas lighten in soft patches where the ink soaked in
+  unevenly.
 - Print effects, each with its own switch:
   - Matte blacks. Even the darkest ink reflects some light, so shadows
     lift towards charcoal like on uncoated paper. White gets a touch
@@ -29,12 +31,10 @@ lock screen. Nothing animates, so a still screen costs nothing.
     feathers along the fibres.
   - Light scattering. Light that enters the paper next to ink scatters
     under it, so dark strokes get a faint soft halo.
-  - Ink mottle. Dark areas lighten in soft patches where the ink soaked
-    in unevenly.
 - A brightness setting to dim the whole screen.
 - Monitors showing a fullscreen window drop the overlay, so games and
-  videos keep direct scanout (can be turned off). The texture starts at a random spot at
-  every login and unlock, so it doesn't wear into an OLED.
+  videos keep direct scanout (can be turned off). The texture starts at a
+  random spot at every login and unlock, so it doesn't wear into an OLED.
 
 Most effects are subtle on purpose and move dark and light areas by only
 a few levels. Screens with low contrast, or with blacks or whites cut off
@@ -136,10 +136,13 @@ takes screenshots, checks partial redraws or measures frame costs:
 
 ```sh
 tools/headless/run.sh check /tmp/out                     # screenshots
-BG='#c04040' tools/headless/run.sh check /tmp/out 1600x1000,1280x800 print-colors-enabled=true
-PAPER_SCALE=1.25 tools/headless/run.sh verify /tmp/out 2000x1250 ink-spread-enabled=true
+BG='#c04040' tools/headless/run.sh check /tmp/out 1600x1000,1280x800 print-colors-enabled=false
+PAPER_SCALE=1.25 tools/headless/run.sh verify /tmp/out 2000x1250
 TIMEOUT=400 tools/headless/run.sh perf /tmp/out 3840x2160
 ```
+
+All effects are on by default; `key=value` arguments change settings for
+the run.
 
 `verify` moves a square over a test card in small steps, then saves what
 the monitor shows (`partial.png`) and the same after a full repaint
@@ -168,11 +171,12 @@ believable textures and ideas for more materials.
 ### Print gamut
 
 `tools/print-gamut.png` is the gamut for print colours, made from Fogra's
-data for uncoated paper
-([FOGRA52.txt](https://registry.color.org/cmyk-registry/fogra52), not in
-the repository). The shader reads `extension/print-lut.png` instead, the
-whole mapping baked into a 65³ lookup table by the same code `preview.py`
-uses:
+characterisation data for uncoated paper (FOGRA52, not in the repository;
+from [Fogra](https://fogra.org/en/downloads/work-tools/characterisation-data),
+whose terms allow free use, or the
+[ICC registry](https://registry.color.org/cmyk-registry/fogra52)). The
+shader reads `extension/print-lut.png` instead, the whole mapping baked
+into a 65³ lookup table by the same code `preview.py` uses:
 
 ```sh
 make gamut FOGRA=path/to/FOGRA52.txt   # gamut, then the lookup table

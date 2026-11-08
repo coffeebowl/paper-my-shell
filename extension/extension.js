@@ -21,7 +21,9 @@ Gio._promisify(Gio.File.prototype, 'load_contents_async');
 Gio._promisify(Gio.File.prototype, 'query_info_async');
 Gio._promisify(Gio.File.prototype, 'enumerate_children_async');
 Gio._promisify(Gio.File.prototype, 'delete_async');
+Gio._promisify(Gio.InputStream.prototype, 'close_async');
 Gio._promisify(Gio.FileEnumerator.prototype, 'next_files_async');
+Gio._promisify(Gio.FileEnumerator.prototype, 'close_async');
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 Gio._promisify(GdkPixbuf.Pixbuf, 'new_from_stream_async');
 Gio._promisify(Gio.DBusConnection.prototype, 'call');
@@ -683,7 +685,7 @@ class PaperPrintEffect extends Clutter.Effect {
         this._scatter.clear();
         this._skipped = skipped;
         // The output changes everywhere.
-        this.get_actor()?.queue_redraw();
+        this.get_actor().queue_redraw();
     }
 
     destroy() {
@@ -1140,7 +1142,7 @@ class PaperPrintEffect extends Clutter.Effect {
             const stage = this._stageRegion(area, layout, copy);
             this._pushRing(copy, this._repainted(stage, layout, copy));
             const actor = this.get_actor();
-            withRectangles(regionRects(stage), r => actor?.queue_redraw_with_clip(r));
+            withRectangles(regionRects(stage), r => actor.queue_redraw_with_clip(r));
         }
         if (waiting)
             return GLib.SOURCE_CONTINUE;
@@ -1176,8 +1178,6 @@ class PaperPrintEffect extends Clutter.Effect {
 
     _queuePending() {
         const actor = this.get_actor();
-        if (!actor)
-            return;
         if (this._fullRedraw)
             actor.queue_redraw();
         else
@@ -1205,8 +1205,12 @@ class PaperPrintEffect extends Clutter.Effect {
  */
 async function loadTexture(file, cancellable) {
     const stream = await file.read_async(GLib.PRIORITY_DEFAULT, cancellable);
-    const pixbuf = await GdkPixbuf.Pixbuf.new_from_stream_async(stream, cancellable);
-    stream.close(null);
+    let pixbuf;
+    try {
+        pixbuf = await GdkPixbuf.Pixbuf.new_from_stream_async(stream, cancellable);
+    } finally {
+        await stream.close_async(GLib.PRIORITY_DEFAULT, null);
+    }
     const content = St.ImageContent.new_with_preferred_size(
         pixbuf.width, pixbuf.height);
     const coglContext = global.stage.context.get_backend().get_cogl_context();
@@ -1245,10 +1249,19 @@ async function exists(file, cancellable) {
             GLib.PRIORITY_DEFAULT, cancellable);
         return true;
     } catch (e) {
-        if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
+        if (e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND))
             return false;
         throw e;
     }
+}
+
+/**
+ * @param {Error} e
+ * @returns {boolean} whether `e` is Gio's CANCELLED, not some other GLib
+ *   error or a plain JS error
+ */
+function isCancelled(e) {
+    return e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
 }
 
 /**
@@ -1277,41 +1290,47 @@ async function generateTexture(extension, name, dir, cancellable) {
 
 /**
  * @param {Gio.File} dir
+ * @param {Gio.Cancellable} cancellable
  * @returns {Promise<Array<[Gio.File, Gio.FileType]>>} its entries, symlinks
  *   not followed
  */
-async function listDir(dir) {
+async function listDir(dir, cancellable) {
     const enumerator = await dir.enumerate_children_async('standard::name,standard::type',
-        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, GLib.PRIORITY_LOW, null);
+        Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, GLib.PRIORITY_LOW, cancellable);
     const entries = [];
-    let infos;
-    while ((infos = await enumerator.next_files_async(32, GLib.PRIORITY_LOW, null)).length)
-        entries.push(...infos.map(info => [enumerator.get_child(info), info.get_file_type()]));
-    enumerator.close(null);
+    try {
+        let infos;
+        while ((infos = await enumerator.next_files_async(32, GLib.PRIORITY_LOW, cancellable)).length)
+            entries.push(...infos.map(info => [enumerator.get_child(info), info.get_file_type()]));
+    } finally {
+        await enumerator.close_async(GLib.PRIORITY_LOW, null);
+    }
     return entries;
 }
 
 /**
  * @param {Gio.File} file
  * @param {Gio.FileType} type
+ * @param {Gio.Cancellable} cancellable
  */
-async function removeTree(file, type) {
+async function removeTree(file, type, cancellable) {
     if (type === Gio.FileType.DIRECTORY) {
-        for (const [child, childType] of await listDir(file))
-            await removeTree(child, childType);
+        for (const [child, childType] of await listDir(file, cancellable))
+            await removeTree(child, childType, cancellable);
     }
-    await file.delete_async(GLib.PRIORITY_LOW, null);
+    await file.delete_async(GLib.PRIORITY_LOW, cancellable);
 }
 
 /**
  * Remove the textures of other generator versions next to dir.
  *
  * @param {Gio.File} dir - from cacheDir()
+ * @param {Gio.Cancellable} cancellable
  */
-async function pruneCache(dir) {
-    for (const [child, type] of await listDir(dir.get_parent())) {
+async function pruneCache(dir, cancellable) {
+    for (const [child, type] of await listDir(dir.get_parent(), cancellable)) {
         if (!child.equal(dir))
-            await removeTree(child, type);
+            await removeTree(child, type, cancellable);
     }
 }
 
@@ -1426,6 +1445,7 @@ class PaperOverlay {
         this._surfaces = [];
         this._textures = null;
         this._cancellable = null;
+        this._pruneCancellable = null;
         this._print = null;
         this._unredirectDisabled = false;
         this._pixelSizes = new Map();
@@ -1467,7 +1487,7 @@ class PaperOverlay {
         try {
             this._pixelSizes = await readPixelSizes(cancellable);
         } catch (e) {
-            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+            if (isCancelled(e))
                 return;
             console.error(`Paper my Shell: cannot read monitor sizes: ${e.message}`);
             this._pixelSizes = new Map();
@@ -1521,8 +1541,7 @@ class PaperOverlay {
         const found = await Promise.all(files.map(file => exists(file, cancellable)));
         if (!found.every(Boolean)) {
             await generateTexture(this._extension, name, dir, cancellable);
-            pruneCache(this._cacheDir).catch(e =>
-                console.error(`Paper my Shell: cannot clean up the texture cache: ${e.message}`));
+            this._pruneCache();
         }
         const [detail, tone, grain, ink, lut] = await Promise.all([
             ...files.map(file => loadTexture(file, cancellable)),
@@ -1543,6 +1562,26 @@ class PaperOverlay {
     }
 
     /**
+     * Remove textures of older generator versions, in the background. A
+     * new run replaces one still going, so two never delete the same files.
+     */
+    async _pruneCache() {
+        this._pruneCancellable?.cancel();
+        const cancellable = this._pruneCancellable = new Gio.Cancellable();
+        try {
+            await pruneCache(this._cacheDir, cancellable);
+        } catch (e) {
+            if (isCancelled(e))
+                return;
+            console.error(`Paper my Shell: cannot clean up the texture cache: ${e.message}`);
+        }
+        // A cancelled run can still end normally if its last step was
+        // already under way; it must not drop a newer run's cancellable.
+        if (this._pruneCancellable === cancellable)
+            this._pruneCancellable = null;
+    }
+
+    /**
      * Load the selected texture, or the default one if that fails, then
      * swap it in. The old texture stays on screen while loading.
      */
@@ -1558,7 +1597,7 @@ class PaperOverlay {
                 textures = await this._loadTextures(name, cancellable);
                 break;
             } catch (e) {
-                if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                if (isCancelled(e))
                     return;
                 console.error(`Paper my Shell: cannot load texture ${name}: ${e.message}`);
             }
@@ -1690,6 +1729,7 @@ class PaperOverlay {
     destroy() {
         this._cancellable?.cancel();
         this._sizesCancellable?.cancel();
+        this._pruneCancellable?.cancel();
         this._settings.disconnectObject(this);
         Main.layoutManager.disconnectObject(this);
         global.display.disconnectObject(this);
@@ -1706,10 +1746,10 @@ class PaperOverlay {
  */
 const PaperToggle = GObject.registerClass(
 class PaperToggle extends QuickMenuToggle {
-    _init(extension, settings) {
+    constructor(extension, settings) {
         const gicon = Gio.FileIcon.new(
             extension.dir.resolve_relative_path('icons/paper-symbolic.svg'));
-        super._init({
+        super({
             title: _('Paper'),
             gicon,
             toggleMode: true,
@@ -1728,8 +1768,8 @@ class PaperToggle extends QuickMenuToggle {
 
 const PaperIndicator = GObject.registerClass(
 class PaperIndicator extends SystemIndicator {
-    _init(extension, settings) {
-        super._init();
+    constructor(extension, settings) {
+        super();
         this.quickSettingsItems.push(new PaperToggle(extension, settings));
 
         // The extension keeps running on the lock screen so the paper stays,

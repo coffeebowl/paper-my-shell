@@ -364,14 +364,12 @@ function scatterStrength(kp, pixel) {
 /**
  * @param {Cogl.Pipeline} pipeline
  * @param {object} values - uniform names without the u_ prefix; numbers,
- *   vectors as arrays, uniform arrays as arrays of those arrays
+ *   vectors as arrays
  */
 function setUniforms(pipeline, values) {
     for (const [name, value] of Object.entries(values)) {
         const location = pipeline.get_uniform_location(`u_${name}`);
-        if (Array.isArray(value?.[0]))
-            pipeline.set_uniform_float(location, value[0].length, value.length, value.flat());
-        else if (Array.isArray(value))
+        if (Array.isArray(value))
             pipeline.set_uniform_float(location, value.length, 1, value);
         else
             pipeline.set_uniform_1f(location, value);
@@ -1331,7 +1329,7 @@ function randomShift() {
  * @param {Gio.Cancellable} cancellable
  * @returns {Promise<Map<number, number>>}
  */
-async function pixelSizes(cancellable) {
+async function readPixelSizes(cancellable) {
     const reply = await Gio.DBus.session.call(
         'org.gnome.Mutter.DisplayConfig', '/org/gnome/Mutter/DisplayConfig',
         'org.gnome.Mutter.DisplayConfig', 'GetResources',
@@ -1467,7 +1465,7 @@ class PaperOverlay {
         this._sizesCancellable?.cancel();
         const cancellable = this._sizesCancellable = new Gio.Cancellable();
         try {
-            this._pixelSizes = await pixelSizes(cancellable);
+            this._pixelSizes = await readPixelSizes(cancellable);
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;

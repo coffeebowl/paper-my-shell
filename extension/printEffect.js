@@ -265,7 +265,7 @@ class PaperPrintEffect extends Clutter.Effect {
             // their own previous frame outside the clip. A clip node can't
             // do this: it intersects its rectangles. The nodes are drawn
             // after this returns, so the clip comes off after the paint.
-            clipFb = this._framebufferRegion(clip, layout, copy);
+            clipFb = centrePixels(clip, layout, copy.width, copy.height);
             copy.fbo.push_region_clip(clipFb);
             copy.clipped = true;
         }
@@ -587,18 +587,6 @@ class PaperPrintEffect extends Clutter.Effect {
             return GLib.SOURCE_CONTINUE;
         this._settleId = 0;
         return GLib.SOURCE_REMOVE;
-    }
-
-    /**
-     * @param {Mtk.Region} clip - in stage coordinates
-     * @param {Mtk.Rectangle} layout - of the view
-     * @param {object} copy
-     * @returns {Mtk.Region} the redraw clip in pixels of the copy
-     *   (centrePixels()); a method of its own so the headless perf helper
-     *   can hand it clips with emulated buffer age
-     */
-    _framebufferRegion(clip, layout, copy) {
-        return centrePixels(clip, layout, copy.width, copy.height);
     }
 
     _popClip(copy) {

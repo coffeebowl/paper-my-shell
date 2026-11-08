@@ -344,13 +344,13 @@ class Field {
     pebbles(spacing, sigma, aniso = 1, angle = 0) {
         const n = this.n;
         const count = Math.trunc(n * n / spacing ** 2);
-        const canvas = new Float64Array(n * n);
+        const seeds = new Float64Array(n * n);
         for (let i = 0; i < count; i++) {
             const y = this.rng.integer(n);
             const x = this.rng.integer(n);
-            canvas[y * n + x] += this.rng.gamma2(0.5);
+            seeds[y * n + x] += this.rng.gamma2(0.5);
         }
-        const a = this.blur(canvas, sigma, aniso, angle);
+        const a = this.blur(seeds, sigma, aniso, angle);
         const m = mean(a);
         const d = std(a);
         return map(a, v => (v - m) / d);
@@ -365,7 +365,7 @@ class Field {
      */
     fibers(count, length, scale, directions = false) {
         const n = this.n;
-        const canvas = new Float64Array(n * n);
+        const strands = new Float64Array(n * n);
         const along = [new Float64Array(n * n), new Float64Array(n * n)];
         const seen = new Int32Array(n * n);
         const lastAngle = new Float64Array(n * n);
@@ -390,12 +390,12 @@ class Field {
             }
             const weight = this.rng.uniform(0.5, 1.0);
             for (const p of pixels) {
-                canvas[p] += weight;
+                strands[p] += weight;
                 along[0][p] += weight * Math.cos(2 * lastAngle[p]);
                 along[1][p] += weight * Math.sin(2 * lastAngle[p]);
             }
         }
-        const a = this.blur(canvas, 0.9 * scale);
+        const a = this.blur(strands, 0.9 * scale);
         const d = std(a) + 1e-9;
         const height = map(a, v => v / d);
         if (!directions)

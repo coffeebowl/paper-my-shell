@@ -2,7 +2,6 @@ import Clutter from 'gi://Clutter';
 import Cogl from 'gi://Cogl';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import Mtk from 'gi://Mtk';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
@@ -133,15 +132,20 @@ function emulateBufferAge(effect) {
             history.shift();
         return united;
     };
-    const fbRegion = proto._framebufferRegion, queueRing = proto._queueRing,
+    const paintView = proto._paintView, queueRing = proto._queueRing,
         queuePending = proto._queuePending;
     if (EMULATE_AGE > 1) {
-        proto._framebufferRegion = function (clip, layout, copy) {
-            if (clip !== lastIn) {
-                lastIn = clip;
-                lastOut = emulate(clip);
+        // Partial redraws only: a copy painted before.
+        proto._paintView = function (node, paintContext, view, fb) {
+            let clip = paintContext.get_redraw_clip();
+            if (clip && this._copies.get(fb)?.painted) {
+                if (clip !== lastIn) {
+                    lastIn = clip;
+                    lastOut = emulate(clip);
+                }
+                clip = lastOut;
             }
-            return fbRegion.call(this, lastOut, layout, copy);
+            return paintView.call(this, node, {get_redraw_clip: () => clip}, view, fb);
         };
     }
     proto._queueRing = function (copy, clip, layout) {

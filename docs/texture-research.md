@@ -76,7 +76,7 @@ monitor, and the illusion shouldn't fight that.
   pixel-level detail rises by about 12 %.
 - **Ink mottle.** On uncoated paper ink soaks in unevenly along the
   formation, so solid dark areas have soft lighter patches. That is the
-  tone tile again at a quarter of its size (stretched 2× instead of 8×),
+  tone tile again at three eighths of its size (stretched 3× instead of 8×),
   added to the OVER pass. `d + (1 − d) · a` only shows on dark areas,
   so light ones stay clean and it costs one texture lookup. The tone
   tile is centred on 0.5, so taken as it is the patches varied by about
@@ -85,7 +85,12 @@ monitor, and the illusion shouldn't fight that.
   starts at the tile's deepest dips instead (0.3): the same cloud, with
   two fifths of the lift. Keeping only what lies above 0.5 removed the
   floor completely but also the cloud's dark half, leaving small light
-  islands.
+  islands. Real mottle goes both ways around the mean: ink stays on top
+  where the paper is closed and soaks in where it is open, so the cloud
+  keeps light and dark in equal parts. Squaring it to grow the dark
+  areas left light islands that looked pasted on. Print standards
+  (ISO 13660) count density changes above 2.5 mm as mottle, below as
+  graininess. Stretched 3×, the cloud's features are about 2 to 5 mm.
 - **Ink spread.** Needs neighbouring pixels, so it runs in the offscreen
   pass with print colours. Real ink on uncoated paper grows strokes with
   sharp, ragged edges (boundary roughening, see MoXi) and feathers along
@@ -339,6 +344,8 @@ makes stochastic textures tileable.
 - [Sampson, The Structural Characterisation of Fibre Networks in Papermaking](https://bioresources.cnr.ncsu.edu/wp-content/uploads/2020/03/2001.2.1205.pdf)
 - Arney & Pray, J. Imaging Sci. Technol. 43(4); Arney & Arney, J. Imaging Sci. Technol. 40(3): the paper point spread function and kp
 - [MoXi: real-time ink dispersion in absorbent paper](https://www.researchgate.net/publication/220184655_MoXi_real-time_ink_dispersion_in_absorbent_paper)
+- [Measurement of printing ink penetration in uncoated papers and its influence on print quality](https://www.researchgate.net/publication/267694165_Measurement_of_printing_ink_penetration_in_uncoated_papers_and_is_influence_on_print_quality): uneven penetration as the cause of mottle
+- [Print (non)uniformity with the ISO 13660 method (GRID 2020)](https://www.grid.uns.ac.rs/symposium/download/2020/11.pdf): mottle below 0.4 cycles/mm, graininess above
 - [Chain and laid lines in medieval paper (Heritage Science)](https://www.nature.com/articles/s40494-023-01013-3)
 - [Etherington & Roberts: chain lines](https://cool.culturalheritage.org/don/dt/dt0650.html)
 - [Hand Papermaking: Washi](https://www.handpapermaking.org/post/washi)

@@ -20,7 +20,7 @@ LUT = Path(__file__).resolve().parent.parent / "extension" / "print-lut.png"
 # As in papergen.js and shaders.js.
 TONE_SCALE = 8
 PAPER_BLACK = 0.05 * np.array([1, 0.97, 0.92]) ** 2.2
-MOTTLE_STRETCH = 2
+MOTTLE_STRETCH = 3
 MOTTLE_FLOOR = 0.3
 INK_SHARE = 0.7
 INK_STRENGTH = 0.9

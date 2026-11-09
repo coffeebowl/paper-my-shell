@@ -1,8 +1,8 @@
 import {TONE_SCALE} from './papergen.js';
 
-// Ink mottle follows the paper's formation at a quarter of its size: the
-// tone tile again, stretched only by this factor.
-const MOTTLE_STRETCH = 2;
+// Ink mottle follows the paper's formation at three eighths of its size:
+// the tone tile again, stretched only by this factor.
+const MOTTLE_STRETCH = 3;
 
 // The tone tile's lowest values (0.5 is flat paper, the deepest dips of the
 // textures lie around 0.3). Mottle starts there, so the whole cloud shows
@@ -98,7 +98,7 @@ float shade = u_brightness * (1.0 - u_intensity * shadow);
  */
 function paperOverGlsl(toneSampler) {
     return `
-vec4 cloud = texture2D(${toneSampler}, uv * u_tone_ratio * ${(TONE_SCALE / MOTTLE_STRETCH).toFixed(1)});
+vec4 cloud = texture2D(${toneSampler}, uv * u_tone_ratio * ${(TONE_SCALE / MOTTLE_STRETCH).toFixed(4)});
 float mottle = u_mottle * max(${(0.5 - MOTTLE_FLOOR).toFixed(2)} + cloud.r - 0.5 * cloud.a, 0.0);
 float highlight = u_intensity * u_balance * light;
 vec4 over = vec4(vec3(highlight), highlight) + vec4(vec3(mottle), mottle) * (1.0 - highlight);

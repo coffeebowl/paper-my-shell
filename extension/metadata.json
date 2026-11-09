@@ -1,7 +1,7 @@
 {
   "uuid": "paper-my-shell@coffeebowl",
   "name": "Paper my Shell",
-  "description": "Lays a realistic paper texture over the whole screen, with the blacks, colours and ink of print. Nothing animates, so a still screen costs nothing.",
+  "description": "Lays a realistic paper texture over the whole screen, so it looks a little more like a printed page and a little less like a glowing panel. Matte blacks, calmer colours and a fine grain give it a softer look that is easier on the eyes.\n\n• Seven papers, from recycled and watercolor to washi and canvas\n• Print effects, each with its own switch: ink mottle, matte blacks, print colours, ink spread and light scattering\n• Covers every app, the panel and the lock screen; fullscreen games and videos stay untouched\n• A brightness setting and a Quick Settings toggle",
   "url": "https://github.com/coffeebowl/paper-my-shell",
   "shell-version": ["51"],
   "session-modes": ["user", "unlock-dialog"],
